@@ -27,11 +27,11 @@ Cambio explícito de este documento respecto a v1.0 sección 1.2: se elimina la 
 
 ## 2. Target de plataforma — Decisión tomada
 
-**Android 8.0 (API 26) como mínimo soportado.** `[ACTUALIZADO EN v1.2.0 — reemplaza la decisión original de API 31]`
+**Android 8.0 (API 26) como mínimo soportado.** `[ACTUALIZADO — reemplaza la decisión original de API 31]`
 
-**Decisión original (v2.0 de este documento):** Android 12 (API 31), excluyendo explícitamente todo dispositivo con Android 11 o anterior.
+**Decisión original de este documento:** Android 12 (API 31), excluyendo explícitamente todo dispositivo con Android 11 o anterior.
 
-**Por qué cambió:** la justificación de la sección 2.1 nunca fue "AAudio no existe antes de API 31" — AAudio existe desde API 26. Era una apuesta sobre la *madurez* de las implementaciones de EXCLUSIVE/MMAP en HALs viejos. Esa apuesta tenía sentido cuando un HAL inmaduro significaba que la app **no reproducía absolutamente nada**: el código pedía EXCLUSIVE + PCM_I32 y devolvía error si no lo conseguía. Desde v1.1.0 existe una cadena de degradación explícita (EXCLUSIVE → SHARED, ver sección 3.6) que reproduce igual y reporta `BIT-PERFECT: NO` con honestidad. Con eso, el argumento para excluir Android 8-11 desapareció: esos dispositivos ahora obtienen exactamente el comportamiento que la sección 3.6 ya describía para cualquier HAL que no conceda modo exclusivo.
+**Por qué cambió:** la justificación de la sección 2.1 nunca fue "AAudio no existe antes de API 31" — AAudio existe desde API 26. Era una apuesta sobre la *madurez* de las implementaciones de EXCLUSIVE/MMAP en HALs viejos. Esa apuesta tenía sentido cuando un HAL inmaduro significaba que la app **no reproducía absolutamente nada**: el código pedía EXCLUSIVE + PCM_I32 y devolvía error si no lo conseguía. Existe una cadena de degradación explícita (EXCLUSIVE → SHARED, ver sección 3.6) que reproduce igual y reporta `BIT-PERFECT: NO` con honestidad. Con eso, el argumento para excluir Android 8-11 desapareció: esos dispositivos ahora obtienen exactamente el comportamiento que la sección 3.6 ya describía para cualquier HAL que no conceda modo exclusivo.
 
 **Por qué API 26 y no más abajo:** es el piso real de AAudio, no una preferencia. Verificado compilando toda la capa nativa con `-Werror=unguarded-availability` contra API 21, 23, 26, 29, 30 y 31: limpia desde 26, falla en 23 y anteriores sobre `AAudio_createStreamBuilder`, `AAudioStream_close` y compañía. Bajar de ahí exigiría un segundo backend de audio sobre OpenSL ES, que **no puede** ser bit-perfect — sería otro producto, no un port.
 
@@ -39,7 +39,7 @@ Cambio explícito de este documento respecto a v1.0 sección 1.2: se elimina la 
 
 ### 2.1 Justificación técnica (para el documento de transparencia pública, sección 6)
 
-`[NOTA v1.2.0: el razonamiento que sigue es el que sustentaba la decisión original de API 31. Se conserva textualmente por transparencia — la sección 6 exige no reescribir la historia de las decisiones — pero ya no es la decisión vigente. Ver arriba.]`
+`[NOTA: el razonamiento que sigue es el que sustentaba la decisión original de API 31. Se conserva textualmente por transparencia — la sección 6 exige no reescribir la historia de las decisiones — pero ya no es la decisión vigente. Ver arriba.]`
 
 - Las APIs de AAudio EXCLUSIVE/MMAP existen desde API 26, pero su estabilidad práctica y la calidad de implementación por parte de los fabricantes de HAL mejora notablemente en versiones más recientes — API 31 es un punto de corte razonable donde la mayoría de HALs activos en el mercado ya tienen implementaciones más maduras, aunque **esto no es una garantía absoluta y varía por fabricante** (ver sección 5, la fragmentación del HAL no desaparece por elegir una API más alta, solo se reduce estadísticamente).
 - `[VERIFICAR EN IMPLEMENTACIÓN]`: confirmar si `MIXER_BEHAVIOR_BIT_PERFECT` (introducida en API 34) debe ser un requisito adicional de versión mínima, o si se trata como mejora opcional en dispositivos que la soporten, con AAudio EXCLUSIVE (disponible desde API 26) como base mínima funcional en toda la API 31+.
@@ -47,7 +47,7 @@ Cambio explícito de este documento respecto a v1.0 sección 1.2: se elimina la 
 
 ### 2.2 Dispositivo de desarrollo vs. audiencia objetivo
 
-El **Galaxy A55 (Exynos 1480)** es el dispositivo de desarrollo y pruebas del equipo — es donde se valida la arquitectura, no una limitación de a quién sirve la app. La audiencia objetivo es **cualquier dispositivo Android con API 26+** (actualizado en v1.2.0; era API 31+), sin exclusión por marca o SoC, con la única excepción reconocida y documentada de dispositivos donde el fabricante bloqueó el modo AAudio EXCLUSIVE a nivel de HAL/firmware (ver sección 5, fragmentación de hardware) — en esos casos la app sigue funcionando en modo SHARED, solo que sin bit-perfect, comunicado con total claridad vía el indicador (sección 3.6).
+El **Galaxy A55 (Exynos 1480)** es el dispositivo de desarrollo y pruebas del equipo — es donde se valida la arquitectura, no una limitación de a quién sirve la app. La audiencia objetivo es **cualquier dispositivo Android con API 26+** (actualizado; era API 31+), sin exclusión por marca o SoC, con la única excepción reconocida y documentada de dispositivos donde el fabricante bloqueó el modo AAudio EXCLUSIVE a nivel de HAL/firmware (ver sección 5, fragmentación de hardware) — en esos casos la app sigue funcionando en modo SHARED, solo que sin bit-perfect, comunicado con total claridad vía el indicador (sección 3.6).
 
 ---
 
@@ -347,7 +347,7 @@ Se confirmó que el proyecto requiere, además del código abierto en sí, un do
 
 - **Cambio de alcance:** de herramienta personal a proyecto open source público — introduce obligación de transparencia formal (sección 6) y soporte a hardware no controlado por el equipo (sección 5).
 - **UI:** 100% C/C++ nativo vía NDK, sin framework de UI de Android, con motor gráfico propio confirmado como rasterización manual (Opción A, sección 3.2) — decisión de máximo ahorro de recursos, con costo reconocido de mantenibilidad y superficie de bugs de bajo nivel.
-- **Target:** Android 8.0 (API 26) como `minSdk` (actualizado en v1.2.0; era API 31 — ver sección 2 para el razonamiento completo); `targetSdk` debe seguir el mínimo que exija Google Play/F-Droid al momento de cada release (API 35-36 en 2026), lo cual implica mantenimiento continuo del proyecto para no quedar obsoleto ante usuarios nuevos.
+- **Target:** Android 8.0 (API 26) como `minSdk` (actualizado; era API 31 — ver sección 2 para el razonamiento completo); `targetSdk` debe seguir el mínimo que exija Google Play/F-Droid al momento de cada release (API 35-36 en 2026), lo cual implica mantenimiento continuo del proyecto para no quedar obsoleto ante usuarios nuevos.
 - **Tamaño estimado:** ~210-480 KB de APK (tras optimizaciones de la sección 3.8: libFLAC decoder-only, `-Os`, símbolos strippeados) más ~15-45 KB por las mejoras de biblioteca de la sección 3.9; ~8-16 MB de RAM en uso — cifras a verificar con build real antes de comunicarlas públicamente.
 - **Audio:** libFLAC decoder-only vía JNI/NDK + AAudio EXCLUSIVE con verificación real de `isMMapUsed()` + indicador bit-perfect de tres estados (SI/PARCIAL/NO) que cruza el resultado de AAudio con el estado real de volumen, con detalle completo en Configuración (sección 3.6).
 - **Volumen:** confirmación explícita del usuario por DAC conectado, sin parsing de descriptores USB, con bloqueo de reproducción hasta responder en cada DAC nuevo (sección 3.5) — nunca atenuación digital de software como alternativa.

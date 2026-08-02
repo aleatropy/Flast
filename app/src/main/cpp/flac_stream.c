@@ -32,6 +32,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "playback_controller.h"
+
 #define LOG_TAG "FlastStream"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -944,30 +946,43 @@ bool flast_stream_resume(void) {
 // disconnect can all end it mid-track, and an indicator that keeps
 // showing YES through any of that is exactly the dishonesty this project
 // exists not to commit. Every condition is re-checked on demand.
-bool flast_stream_is_bit_perfect_now(void) {
-    if (output_is_dead()) return false;
-    if (AAudioStream_getSharingMode(g_state.aaudio_stream) != AAUDIO_SHARING_MODE_EXCLUSIVE) {
-        return false;
-    }
-    if (g_AAudioStream_isMMapUsed != NULL &&
-        !g_AAudioStream_isMMapUsed(g_state.aaudio_stream)) {
-        return false;
-    }
+// Returns WHICH condition failed, not merely that one did. The indicator
+// is only useful if it can say why, and "the HAL refused exclusive mode"
+// is a very different thing to tell a user than "your 5.1 file was folded
+// into stereo" -- the first is their phone's fault and unfixable, the
+// second is a property of the file they chose.
+//
+// Ordered most-specific first: a channel or rate conversion is the real
+// explanation even though it also happens to force SHARED mode, so it is
+// reported ahead of the generic exclusive-mode failure.
+int flast_stream_bit_perfect_reason(void) {
+    if (output_is_dead()) return BP_REASON_NOT_PLAYING;
 
-    // Any rate conversion or channel up/downmix disqualifies it, whatever
-    // the sharing mode says. A 5.1 file folded down to a stereo DAC is not
-    // the file's samples any more, and neither is 44.1k resampled to 48k.
-    if ((uint32_t)AAudioStream_getSampleRate(g_state.aaudio_stream) != g_state.sample_rate) {
-        return false;
-    }
     if ((uint32_t)AAudioStream_getChannelCount(g_state.aaudio_stream) != g_state.channels) {
-        return false;
+        return BP_REASON_CHANNELS_CONVERTED;
+    }
+    if ((uint32_t)AAudioStream_getSampleRate(g_state.aaudio_stream) != g_state.sample_rate) {
+        return BP_REASON_RATE_CONVERTED;
     }
 
     aaudio_format_t f = AAudioStream_getFormat(g_state.aaudio_stream);
-    if (f == AAUDIO_FORMAT_PCM_I32) return true;
-    if (f == AAUDIO_FORMAT_PCM_I16 && g_state.bits_per_sample <= 16) return true;
-    return false;
+    bool format_carries_everything =
+        (f == AAUDIO_FORMAT_PCM_I32) ||
+        (f == AAUDIO_FORMAT_PCM_I16 && g_state.bits_per_sample <= 16);
+    if (!format_carries_everything) return BP_REASON_FORMAT_TOO_SMALL;
+
+    if (AAudioStream_getSharingMode(g_state.aaudio_stream) != AAUDIO_SHARING_MODE_EXCLUSIVE) {
+        return BP_REASON_NOT_EXCLUSIVE;
+    }
+    if (g_AAudioStream_isMMapUsed != NULL &&
+        !g_AAudioStream_isMMapUsed(g_state.aaudio_stream)) {
+        return BP_REASON_NOT_EXCLUSIVE;
+    }
+    return BP_REASON_OK;
+}
+
+bool flast_stream_is_bit_perfect_now(void) {
+    return flast_stream_bit_perfect_reason() == BP_REASON_OK;
 }
 
 double flast_stream_get_position_seconds(void) {

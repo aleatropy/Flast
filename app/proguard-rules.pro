@@ -29,8 +29,8 @@
 # bit-perfect state the framework owns (AudioManager volume, Bluetooth
 # routing, the DAC answer) plus the internalDataPath fallback.
 -keepclassmembers class com.flast.FlastNativeActivity {
-    int jniGetBitPerfectStateForNative(boolean);
-    java.lang.String jniGetBitPerfectReason(boolean);
+    int jniGetBitPerfectStateForNative(int);
+    java.lang.String jniGetBitPerfectReason(int);
     java.lang.String jniFilesDir();
     void jniAnswerDacVolume(boolean);
     java.lang.String[] jniStorageRoots();

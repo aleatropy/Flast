@@ -43,8 +43,8 @@
 #define LOG_TAG "FlastUI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-extern int jni_get_bit_perfect_state(struct android_app *app, bool is_bit_perfect_native);
-extern char *jni_get_bit_perfect_reason(struct android_app *app, bool is_bit_perfect_native);
+extern int jni_get_bit_perfect_state(struct android_app *app, int reason);
+extern char *jni_get_bit_perfect_reason(struct android_app *app, int reason);
 extern bool jni_get_files_dir(struct android_app *app, char *out, size_t out_sz);
 extern int jni_get_storage_roots(struct android_app *app, char ***out);
 extern void jni_free_storage_roots(char **roots, int count);
@@ -766,13 +766,13 @@ static void draw_screen_config(ui_pixel_t *px, ui_pixel_t fg, ui_pixel_t bg) {
     draw_columns(px, fg, bg, y, rh, theme_labels, 2, g_state.theme_black ? 0 : 1);
     y += rh + 8;
 
-    int bp_state = jni_get_bit_perfect_state(g_state.app, g_state.snap.is_bit_perfect_native);
+    int bp_state = jni_get_bit_perfect_state(g_state.app, g_state.snap.bit_perfect_reason);
     const char *bp_label = bp_state == 0 ? "BIT-PERFECT: YES"
                             : bp_state == 1 ? "BIT-PERFECT: PARTIAL" : "BIT-PERFECT: NO";
     ui_draw_text(px, g_state.stride, 8, y, bp_label, scale, fg);
     y += gh + 6;
 
-    char *reason = jni_get_bit_perfect_reason(g_state.app, g_state.snap.is_bit_perfect_native);
+    char *reason = jni_get_bit_perfect_reason(g_state.app, g_state.snap.bit_perfect_reason);
     if (reason != NULL) {
         draw_wrapped_text(px, fg, 8, y, reason, scale);
         free(reason);
@@ -780,7 +780,7 @@ static void draw_screen_config(ui_pixel_t *px, ui_pixel_t fg, ui_pixel_t bg) {
 }
 
 static const char *bit_perfect_label(const PlaybackSnapshot *s) {
-    int state = jni_get_bit_perfect_state(g_state.app, s->is_bit_perfect_native);
+    int state = jni_get_bit_perfect_state(g_state.app, s->bit_perfect_reason);
     if (state == 0) return "BIT-PERFECT: YES";
     if (state == 1) return "BIT-PERFECT: PARTIAL";
     return "BIT-PERFECT: NO";
@@ -1022,7 +1022,7 @@ static void handle_tap_player(float x, float y) {
     int y_controls = y0 + rh * 6;
 
     if (y >= y_bp && y < y_bp + rh) {
-        char *reason = jni_get_bit_perfect_reason(g_state.app, g_state.snap.is_bit_perfect_native);
+        char *reason = jni_get_bit_perfect_reason(g_state.app, g_state.snap.bit_perfect_reason);
         if (reason != NULL) {
             snprintf(g_state.bp_reason_msg, sizeof(g_state.bp_reason_msg), "%s", reason);
             free(reason);

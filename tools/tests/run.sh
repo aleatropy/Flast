@@ -77,7 +77,7 @@ PY
 
 # Never run a stale binary from a previous successful build: a compile
 # error would otherwise show up as the OLD test still passing.
-rm -f "$OUT"/t_ml "$OUT"/t_cache "$OUT"/t_view "$OUT"/t_render "$OUT"/t_ring_a "$OUT"/t_ring_t
+rm -f "$OUT"/t_ml "$OUT"/t_cache "$OUT"/t_view "$OUT"/t_render "$OUT"/t_ring_a "$OUT"/t_ring_t "$OUT"/t_queue "$OUT"/t_dac
 
 fail=0
 run() { # run <label> <binary> <env...>
@@ -105,6 +105,8 @@ $CC $COMMON $ASAN -o "$OUT/t_view"   tools/tests/test_album_views.c   "$CPP/musi
 $CC $COMMON $ASAN -o "$OUT/t_render" tools/tests/test_render.c "$CPP/ui_render.c" "$CPP/ui_font_spleen8x16.c" || fail=1
 $CC $COMMON $ASAN -o "$OUT/t_ring_a" tools/tests/test_ring_buffer.c -lpthread || fail=1
 $CC $COMMON -fsanitize=thread -o "$OUT/t_ring_t" tools/tests/test_ring_buffer.c -lpthread || fail=1
+$CC $COMMON $ASAN -o "$OUT/t_queue"  tools/tests/test_queue_end.c "$CPP/playback_controller.c" "$CPP/music_library.c" -lpthread || fail=1
+$CC $COMMON $ASAN -o "$OUT/t_dac"    tools/tests/test_dac_prefs.c "$CPP/music_library.c" || fail=1
 
 echo "running..."
 rm -rf "$OUT/tree" "$OUT/files"; mkdir -p "$OUT/files"
@@ -114,6 +116,9 @@ run "album_views"    "$OUT/t_view"
 run "render"         "$OUT/t_render"
 run "ring (ASan)"    "$OUT/t_ring_a"
 run "ring (TSan)"    "$OUT/t_ring_t"
+run "queue_end"      "$OUT/t_queue"
+rm -rf "$OUT/dacdir"; mkdir -p "$OUT/dacdir"
+run "dac_prefs"      "$OUT/t_dac" "FILESDIR=$OUT/dacdir"
 
 [ $fail -eq 0 ] && echo "OK" || echo "SOME SUITES FAILED"
 exit $fail

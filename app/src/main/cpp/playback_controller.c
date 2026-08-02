@@ -48,6 +48,7 @@ extern void flast_stream_pause(void);
 extern bool flast_stream_resume(void);
 extern double flast_stream_get_position_seconds(void);
 extern bool flast_stream_is_bit_perfect_now(void);
+extern int flast_stream_bit_perfect_reason(void);
 
 #define NAV_DEBOUNCE_MS 280LL
 #define PREV_RESTART_THRESHOLD_SECONDS 3.0
@@ -67,6 +68,14 @@ static bool g_dac_blocked = false;
 static bool g_has_pending_nav = false;
 static int g_pending_index = 0;
 static long long g_nav_deadline_ms = 0;
+
+// True once playback has run off the end of the queue. The queue is then
+// rewound to the first track WITHOUT playing it, so the player shows
+// where playback would resume rather than sitting on the track that just
+// ended. This flag is what makes the transport controls behave sensibly
+// from that resting point: next goes to the first track (not the second),
+// previous goes to the last.
+static bool g_queue_ended = false;
 
 static bool g_dirty = true;
 
@@ -89,6 +98,7 @@ static int wrap_index_locked(int index) {
 
 static void switch_to_index_locked(int index) {
     if (g_queue_count == 0) return;
+    g_queue_ended = false;
     g_current_index = wrap_index_locked(index);
 
     if (g_dac_blocked) {
@@ -137,6 +147,7 @@ void pc_init(void) {
     g_is_bit_perfect_native = false;
     g_dac_blocked = false;
     g_has_pending_nav = false;
+    g_queue_ended = false;
     g_dirty = true;
     pthread_mutex_unlock(&g_lock);
 }
@@ -157,6 +168,7 @@ void pc_set_queue(StrList *queue, int start_index) {
         if (queue != NULL) ml_str_list_free(queue);
         g_current_index = -1;
     }
+    g_queue_ended = false;
     g_has_pending_nav = false;
     g_dirty = true;
     pthread_mutex_unlock(&g_lock);
@@ -181,7 +193,9 @@ void pc_get_snapshot(PlaybackSnapshot *out) {
     // opened -- see flast_stream_is_bit_perfect_now(). Done inside the
     // lock because that is what serialises against the stream being torn
     // down on another thread.
-    out->is_bit_perfect_native = g_is_playing && flast_stream_is_bit_perfect_now();
+    out->bit_perfect_reason = g_is_playing ? flast_stream_bit_perfect_reason()
+                                           : (int)BP_REASON_NOT_PLAYING;
+    out->is_bit_perfect_native = (out->bit_perfect_reason == (int)BP_REASON_OK);
     out->has_pending_nav = g_has_pending_nav;
     out->pending_preview_index = g_has_pending_nav ? wrap_index_locked(g_pending_index) : -1;
     if (out->has_pending_nav && out->pending_preview_index >= 0 &&
@@ -244,14 +258,23 @@ void pc_stop(void) {
 
 void pc_request_next(void) {
     pthread_mutex_lock(&g_lock);
-    int base = g_has_pending_nav ? g_pending_index : g_current_index;
-    schedule_nav_locked(base + 1);
+    if (g_queue_ended) {
+        // Resting at the end of the queue: the first track IS the next
+        // one. Advancing from here must not skip it.
+        schedule_nav_locked(0);
+    } else {
+        int base = g_has_pending_nav ? g_pending_index : g_current_index;
+        schedule_nav_locked(base + 1);
+    }
     pthread_mutex_unlock(&g_lock);
 }
 
 void pc_request_prev(void) {
     pthread_mutex_lock(&g_lock);
-    if (g_has_pending_nav) {
+    if (g_queue_ended) {
+        // Going back from the resting point means the last track.
+        schedule_nav_locked(g_queue_count - 1);
+    } else if (g_has_pending_nav) {
         schedule_nav_locked(g_pending_index - 1);
     } else if (g_is_playing && flast_stream_get_position_seconds() >= PREV_RESTART_THRESHOLD_SECONDS) {
 
@@ -286,10 +309,15 @@ int pc_ms_until_next_tick(void) {
 void pc_on_track_finished(void) {
     pthread_mutex_lock(&g_lock);
     if (g_current_index >= g_queue_count - 1) {
-
+        // End of the album/playlist. Stop, then rewind to the first track
+        // without starting it, so the player is showing what play would
+        // begin rather than leaving the finished track on screen as if it
+        // were still current.
         flast_stream_stop();
         g_is_playing = false;
         g_is_paused = false;
+        g_current_index = g_queue_count > 0 ? 0 : -1;
+        g_queue_ended = true;
         g_dirty = true;
     } else {
         switch_to_index_locked(g_current_index + 1);

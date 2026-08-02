@@ -85,6 +85,20 @@ bool ml_scan(StrList *out);
 // Playlists are plain text files in <files>/playlists/<name>.txt, one
 // absolute track path per line -- the same on-disk format the Kotlin
 // implementation used, so existing playlists survive this change.
+// DAC volume answers, keyed by USB vendor/product ID.
+//
+// Spec 3.5 says this choice is persisted "igual mecanismo que las playlists
+// ... un archivo de texto plano" -- the same mechanism as playlists. Those
+// live in C, so this does too. It also removes the last Kotlin code that
+// touched the filesystem, and with it the kotlin.io / kotlin.text /
+// kotlin.sequences machinery that a single readLines()+split()+joinToString()
+// call chain drags into classes.dex.
+//
+// Returns 1 = the DAC has its own volume control, 0 = it does not,
+// -1 = never answered for this device.
+int ml_get_dac_answer(int vendor_id, int product_id);
+bool ml_set_dac_answer(int vendor_id, int product_id, bool has_own_control);
+
 bool ml_list_playlists(StrList *out);
 bool ml_load_playlist(const char *name, StrList *out);
 bool ml_add_to_playlist(const char *name, const char *path);

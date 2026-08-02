@@ -56,12 +56,11 @@ GPL exists precisely so you can.
 
 ## Ground rules for code
 
-**Measure, don't assume.** This codebase has been wrong more than once about
-where its own costs were. Two examples worth internalising: `hardwareAccelerated`
-was argued to be worth nothing and turned out to be 1.1 MB; the audio callback
-was assumed to be the CPU bottleneck and a 10× larger callback changed total CPU
-by 0.8%, which is noise. If you claim an optimisation, include the before and
-after.
+**Measure, don't assume.** Intuition about where this app spends memory and
+CPU is unreliable — the largest single consumer is the window's graphics
+buffer, and most of the CPU during playback belongs to Android's low-latency
+audio path rather than to FLAC decoding. If you claim an optimisation, include
+the before and after numbers.
 
 **A silent bug is the enemy.** The dangerous defects here do not crash — the
 scanner quietly misses a folder, the renderer quietly writes past a row, the
@@ -95,10 +94,10 @@ calls:
 
 - No allocation, no locks, no file or network I/O, no logging.
 - The ring buffer between the decoder and the callback is lock-free
-  single-producer/single-consumer. Keep it that way — it used to use a mutex,
-  which meant the real-time thread could block on the decode thread.
+  single-producer/single-consumer. Keep it that way: a mutex there lets the
+  real-time thread block on the decode thread, which is how dropouts happen.
 - Never free anything the callback can still touch without stopping the stream
-  and waiting for it first. That was a real use-after-free here.
+  and waiting for it first.
 
 ## Building
 

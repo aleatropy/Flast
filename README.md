@@ -34,10 +34,10 @@ tablets are ARM; emulators and a few Chromebooks are Intel.
 
 | File | Which CPU | Which devices |
 |---|---|---|
-| `flast-1.0.0-universal.apk` | **all three, bundled** | **anything — pick this if unsure.** 295,823 B |
-| `flast-1.0.0-arm64-v8a.apk` | 64-bit ARM | almost every phone/tablet since ~2017. 116,530 B |
-| `flast-1.0.0-armeabi-v7a.apk` | 32-bit ARM | older and budget phones. **Untested — see below.** 97,836 B |
-| `flast-1.0.0-x86_64.apk` | 64-bit Intel/AMD | Android emulators, some Chromebooks, a few old Intel tablets. 115,431 B |
+| `flast-1.0.0-universal.apk` | **all three, bundled** | **anything — pick this if unsure.** 297,703 B |
+| `flast-1.0.0-arm64-v8a.apk` | 64-bit ARM | almost every phone/tablet since ~2017. 118,426 B |
+| `flast-1.0.0-armeabi-v7a.apk` | 32-bit ARM | older and budget phones. **Untested — see below.** 99,360 B |
+| `flast-1.0.0-x86_64.apk` | 64-bit Intel/AMD | Android emulators, some Chromebooks, a few old Intel tablets. 117,311 B |
 
 **The universal APK is not a clever binary that runs everywhere.** It is a
 bundle containing all three, and your device picks the one it needs and
@@ -136,8 +136,7 @@ Tap the indicator and it tells you exactly which of those applies and why.
 
 **Flast still plays in all of those cases.** It falls back to Android's shared
 audio path and keeps working — it just refuses to claim something it didn't
-achieve. Earlier versions of this app returned an error and played nothing at
-all when exclusive mode was unavailable; that was wrong, and it's fixed.
+achieve.
 
 ### One known failure mode worth knowing about
 
@@ -199,7 +198,7 @@ XMOS USB DAC. These are measurements, not estimates:
 
 | | |
 |---|---|
-| APK | 116,530 B (arm64) · 97,836 B (armeabi-v7a) · 295,823 B (universal) |
+| APK | 118,426 B (arm64) · 99,360 B (armeabi-v7a) · 297,703 B (universal) |
 | Installed on device | **127 KB** |
 | Scan cache for 658 tracks | 30,045 B |
 | RAM in use | ~15–20 MB |

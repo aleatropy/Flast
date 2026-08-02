@@ -93,8 +93,9 @@ class UsbDacDetector(
         registered = false
     }
 
-    fun currentlyConnectedDevices(): List<UsbDevice> {
+    fun currentlyConnectedDevices(): java.util.ArrayList<UsbDevice> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-        return usbManager.deviceList.values.toList()
+        // java.util directly: .toList() is a kotlin.collections call.
+        return java.util.ArrayList(usbManager.deviceList.values)
     }
 }

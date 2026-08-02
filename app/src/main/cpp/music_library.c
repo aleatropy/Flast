@@ -532,6 +532,93 @@ bool ml_load_cache(StrList *out) {
 }
 
 // ---------------------------------------------------------------------
+// DAC volume answers
+// ---------------------------------------------------------------------
+#define ML_DAC_PREFS_NAME "dac_volume_prefs.txt"
+
+static bool dac_prefs_path(char *out, size_t n) {
+    if (!ml_ready()) return false;
+    return snprintf(out, n, "%s/%s", g_files_dir, ML_DAC_PREFS_NAME) < (int)n;
+}
+
+int ml_get_dac_answer(int vendor_id, int product_id) {
+    char path[ML_MAX_PATH];
+    if (!dac_prefs_path(path, sizeof(path))) return -1;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return -1;
+
+    int answer = -1;
+    char line[128];
+    while (fgets(line, sizeof(line), f) != NULL) {
+        int v = 0, p = 0;
+        char verdict[8] = {0};
+        // Same on-disk format the Kotlin implementation wrote, so answers
+        // saved by an earlier install are still honoured.
+        if (sscanf(line, "%d:%d:%7s", &v, &p, verdict) == 3 &&
+            v == vendor_id && p == product_id) {
+            answer = (strncmp(verdict, "SI", 2) == 0) ? 1 : 0;
+            /* keep scanning: a later line for the same device wins */
+        }
+    }
+    fclose(f);
+    LOGI("ml_get_dac_answer(%d, %d) = %d", vendor_id, product_id, answer);
+    return answer;
+}
+
+bool ml_set_dac_answer(int vendor_id, int product_id, bool has_own_control) {
+    char path[ML_MAX_PATH];
+    if (!dac_prefs_path(path, sizeof(path))) return false;
+
+    // Read everything except this device, then rewrite with the new answer
+    // appended. The file holds one short line per DAC a person has ever
+    // plugged in, so rewriting it whole costs nothing.
+    Arena keep = {0};
+    FILE *f = fopen(path, "rb");
+    if (f != NULL) {
+        char line[128];
+        while (fgets(line, sizeof(line), f) != NULL) {
+            size_t len = strlen(line);
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+            if (len == 0) continue;
+            int v = 0, p = 0;
+            char verdict[8] = {0};
+            if (sscanf(line, "%d:%d:%7s", &v, &p, verdict) == 3 &&
+                v == vendor_id && p == product_id) {
+                continue; /* superseded */
+            }
+            arena_push(&keep, line, len);
+        }
+        fclose(f);
+    }
+
+    char tmp[ML_MAX_PATH + 8];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *out = fopen(tmp, "wb");
+    if (out == NULL) {
+        free(keep.buf);
+        LOGW("ml_set_dac_answer: cannot write %s (%s)", tmp, strerror(errno));
+        return false;
+    }
+    const char *p2 = keep.buf;
+    for (int i = 0; i < keep.count && p2 != NULL; i++) {
+        fputs(p2, out);
+        fputc('\n', out);
+        p2 += strlen(p2) + 1;
+    }
+    fprintf(out, "%d:%d:%s\n", vendor_id, product_id, has_own_control ? "SI" : "NO");
+    bool ok = (fflush(out) == 0) && (ferror(out) == 0);
+    fclose(out);
+    free(keep.buf);
+
+    if (ok && rename(tmp, path) == 0) {
+        LOGI("ml_set_dac_answer(%d, %d) = %d", vendor_id, product_id, (int)has_own_control);
+        return true;
+    }
+    unlink(tmp);
+    return false;
+}
+
+// ---------------------------------------------------------------------
 // Playlists
 // ---------------------------------------------------------------------
 static bool playlist_name_ok(const char *name) {

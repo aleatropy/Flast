@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "music_library.h"
 #include "playback_controller.h"
 
 #define LOG_TAG "FlacPlayerNative"
@@ -161,6 +162,39 @@ Java_com_flast_FlastNativeActivity_jniSetStoragePermission(JNIEnv *env, jobject 
     atomic_store(&g_storage_permission, granted == JNI_TRUE);
 }
 
+// Storage lives in C, but the Kotlin layer reaches it before android_main()
+// has necessarily run -- onCreate() checks for an already-connected DAC on
+// the very first frame. Kotlin calls this first so the files dir is known
+// either way; ml_init() is idempotent.
+JNIEXPORT void JNICALL
+Java_com_flast_FlastNativeActivity_jniInitStorage(JNIEnv *env, jobject thiz, jstring dir) {
+    (void)thiz;
+    if (dir == NULL) return;
+    const char *utf = (*env)->GetStringUTFChars(env, dir, NULL);
+    if (utf != NULL) {
+        ml_init(utf);
+        (*env)->ReleaseStringUTFChars(env, dir, utf);
+    }
+}
+
+// -1 = never answered for this device, 0 = no own volume control, 1 = yes.
+JNIEXPORT jint JNICALL
+Java_com_flast_FlastNativeActivity_jniGetDacAnswer(JNIEnv *env, jobject thiz,
+                                                    jint vendor_id, jint product_id) {
+    (void)env;
+    (void)thiz;
+    return (jint)ml_get_dac_answer((int)vendor_id, (int)product_id);
+}
+
+JNIEXPORT void JNICALL
+Java_com_flast_FlastNativeActivity_jniSaveDacAnswer(JNIEnv *env, jobject thiz,
+                                                     jint vendor_id, jint product_id,
+                                                     jboolean has_own_control) {
+    (void)env;
+    (void)thiz;
+    ml_set_dac_answer((int)vendor_id, (int)product_id, has_own_control == JNI_TRUE);
+}
+
 JNIEXPORT void JNICALL
 Java_com_flast_FlastNativeActivity_jniRescanMusic(JNIEnv *env, jobject thiz) {
     (void)env;
@@ -225,22 +259,22 @@ static jmethodID get_method(JNIEnv *env, jobject activity, const char *name, con
     return mid;
 }
 
-int jni_get_bit_perfect_state(struct android_app *app, bool is_bit_perfect_native) {
+int jni_get_bit_perfect_state(struct android_app *app, int reason) {
     JNIEnv *env = get_env(app);
     if (env == NULL) return 2;
     jobject activity = app->activity->clazz;
-    jmethodID mid = get_method(env, activity, "jniGetBitPerfectStateForNative", "(Z)I");
+    jmethodID mid = get_method(env, activity, "jniGetBitPerfectStateForNative", "(I)I");
     if (mid == NULL) return 2;
-    return (int)(*env)->CallIntMethod(env, activity, mid, (jboolean)(is_bit_perfect_native ? JNI_TRUE : JNI_FALSE));
+    return (int)(*env)->CallIntMethod(env, activity, mid, (jint)reason);
 }
 
-char *jni_get_bit_perfect_reason(struct android_app *app, bool is_bit_perfect_native) {
+char *jni_get_bit_perfect_reason(struct android_app *app, int reason) {
     JNIEnv *env = get_env(app);
     if (env == NULL) return NULL;
     jobject activity = app->activity->clazz;
-    jmethodID mid = get_method(env, activity, "jniGetBitPerfectReason", "(Z)Ljava/lang/String;");
+    jmethodID mid = get_method(env, activity, "jniGetBitPerfectReason", "(I)Ljava/lang/String;");
     if (mid == NULL) return NULL;
-    jstring result = (jstring)(*env)->CallObjectMethod(env, activity, mid, (jboolean)(is_bit_perfect_native ? JNI_TRUE : JNI_FALSE));
+    jstring result = (jstring)(*env)->CallObjectMethod(env, activity, mid, (jint)reason);
     if (result == NULL) return NULL;
     const char *utf = (*env)->GetStringUTFChars(env, result, NULL);
     char *out = utf != NULL ? strdup(utf) : NULL;

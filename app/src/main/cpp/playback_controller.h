@@ -26,6 +26,17 @@
 
 #include "music_library.h"
 
+// Why the audio path is (or is not) bit-perfect right now. Shared with the
+// Kotlin layer, which turns it into the sentence shown in CONFIG.
+typedef enum {
+    BP_REASON_OK = 0,
+    BP_REASON_NOT_PLAYING = 1,
+    BP_REASON_NOT_EXCLUSIVE = 2,
+    BP_REASON_FORMAT_TOO_SMALL = 3,
+    BP_REASON_CHANNELS_CONVERTED = 4,
+    BP_REASON_RATE_CONVERTED = 5,
+} BitPerfectReason;
+
 typedef struct {
     int queue_size;
     int current_index;
@@ -33,6 +44,7 @@ typedef struct {
     bool is_playing;
     bool is_paused;
     bool is_bit_perfect_native;
+    int bit_perfect_reason;   // BitPerfectReason
     bool has_pending_nav;
     int pending_preview_index;
     char pending_preview_path[512];

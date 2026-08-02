@@ -10,7 +10,7 @@ device, or explicitly marked as an **estimate**. That distinction is not
 decoration — publishing an estimate as if it were a measurement is the exact
 failure this document is meant to prevent.
 
-**Applies to:** version `1.0.0` (versionCode 1) — the first public release.
+**Applies to:** version `1.0.0`.
 **Measurements taken:** 2026-08-01, Samsung Galaxy A55 (SM-A556E), Android 16
 (API 36), arm64-v8a, 658-track FLAC library on a microSD card, XMOS USB DAC
 (VID `0x20B1`, PID `0x3021`).
@@ -94,14 +94,13 @@ tens of megabytes of APK and 30–45 MB of RAM.
 - **Far fewer people can contribute.** Fixing a bug here means reading manual
   memory management, hand-written touch handling, and a custom text renderer.
   That is a much higher barrier than "edit a Compose function".
-- **More low-level bugs are possible.** A whole class of mistakes that the
-  Android framework makes impossible — buffer overruns, use-after-free, data
-  races between the audio thread and everything else — are live risks here and
-  have to be prevented by hand. Some already happened during development: a
-  use-after-free on the audio ring buffer, a lost thread signal that silently
-  broke track advance, and a stale signal that made tracks skip by themselves
-  every ten seconds. All three were found and fixed, and all three are the
-  kind of bug this architecture invites.
+- **More low-level bugs are possible.** A whole class of mistakes the Android
+  framework makes impossible — buffer overruns, use-after-free, data races
+  between the audio thread and everything else — are live risks here and have
+  to be prevented by hand. This is the standing cost of the approach, not a
+  hypothetical one, which is why the project carries a sanitiser test suite
+  (`tools/tests/run.sh`) over the scanner, the renderer and the audio ring
+  buffer.
 - **Accessibility is effectively absent.** Because the app draws its own
   pixels instead of using Views, Android's screen readers have nothing to
   read. TalkBack cannot describe this interface. This is a real exclusion and
@@ -135,9 +134,9 @@ and explains it on request.**
 | `BIT-PERFECT: NO` | Any of: the HAL refused exclusive mode; output is Bluetooth; output is the phone's internal speaker or jack; the granted format cannot carry the file's bit depth; **or the channel count or sample rate had to be converted** (see below). |
 
 **Every one of those conditions is re-checked continuously**, not recorded
-once when the track opened. An indicator that keeps showing `YES` after the
-audio path has been taken away is exactly the dishonesty this document exists
-to prevent, and an earlier version of this app did precisely that.
+once when the track opened. An indicator that kept showing `YES` after the
+audio path had been taken away would be exactly the dishonesty this document
+exists to prevent.
 
 ### Channel and rate conversion are not bit-perfect
 
@@ -147,16 +146,14 @@ to a mono file played as stereo, and to any sample-rate conversion. This is
 true no matter how good the rest of the path is, so it is reported as `NO`.
 
 This case is not in the original specification's table of states (section
-3.6); it was found by playing an 88.2 kHz 5.1 file on a two-channel DAC
-during testing, and is documented here as a real fourth way to lose
-bit-perfect.
+3.6). It is documented here as a real fourth way to lose bit-perfect, and the
+app names it explicitly rather than blaming the device's audio driver — a 5.1
+file folded into stereo is a property of the file, not a fault in the phone.
 
 Tapping the indicator explains which case applies.
 
 **When bit-perfect is not available, the app still plays.** It falls back to
-Android's normal shared audio path and says `NO`. An earlier version returned
-an error and produced no sound at all on devices without memory-mapped audio;
-that was a defect, and it is fixed as of 1.1.0.
+Android's normal shared audio path and says `NO`.
 
 ### Bluetooth can never be bit-perfect
 
@@ -220,15 +217,14 @@ Supporting older Android would require a second audio backend built on
 OpenSL ES, which **cannot** deliver bit-perfect output. That would be a
 different product wearing this one's name.
 
-**This replaces an earlier decision.** Versions before 1.2.0 required Android
-12 (API 31). That floor was chosen as a bet on newer devices having more
-mature exclusive-mode implementations — a bet that made sense when an immature
-HAL meant the app played nothing at all. Since the fallback path was added in
-1.1.0, such devices simply get `BIT-PERFECT: NO` and working audio, so the
-reason to exclude Android 8 through 11 no longer held. The original reasoning
-is preserved verbatim in `FLAC_PLAYER_SPEC_v2.md` section 2.1 rather than
-rewritten, because a decision record that quietly edits its own history is
-worth nothing.
+**This is lower than the project's design specification originally proposed.**
+`FLAC_PLAYER_SPEC_v2.md` section 2 argued for Android 12, as a bet on newer
+devices having more mature exclusive-mode implementations. That reasoning
+assumed an immature audio driver meant no sound at all. With the fallback path
+described in section 4, such a device simply gets `BIT-PERFECT: NO` and working
+audio, so there is no longer a reason to exclude Android 8 through 11. The
+original argument is left in the specification rather than rewritten, because
+a design record that quietly edits its own history is worth nothing.
 
 **The honest cost:** the range of Android versions this app claims to support
 is now much wider than the range it has been tested on. It has been run on
@@ -244,10 +240,10 @@ measurements of one build on one device, not guarantees.**
 
 | | |
 |---|---|
-| APK, arm64-v8a | 116,530 bytes |
-| APK, armeabi-v7a | 97,836 bytes |
-| APK, x86_64 | 115,431 bytes |
-| APK, universal (all three) | 295,823 bytes |
+| APK, arm64-v8a | 118,426 bytes |
+| APK, armeabi-v7a | 99,360 bytes |
+| APK, x86_64 | 117,311 bytes |
+| APK, universal (all three) | 297,703 bytes |
 | Installed size on device | **127 KB** |
 | Scan cache, 658 tracks | 30,045 bytes (~46 bytes per track) |
 | Playlists | a few bytes per track |

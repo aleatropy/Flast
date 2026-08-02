@@ -43,6 +43,15 @@ class FlastNativeActivity : NativeActivity() {
         private const val TAG = "FlastNativeActivity"
         private const val PERMISSIONS_REQUEST_CODE = 4001
 
+        // Reason codes from the native audio layer -- must match
+        // BitPerfectReason in playback_controller.h.
+        private const val BP_OK = 0
+        private const val BP_NOT_PLAYING = 1
+        private const val BP_NOT_EXCLUSIVE = 2
+        private const val BP_FORMAT_TOO_SMALL = 3
+        private const val BP_CHANNELS_CONVERTED = 4
+        private const val BP_RATE_CONVERTED = 5
+
         // Which DAC the PROCESS is currently on. Deliberately static
         // rather than per-Activity: the Activity is destroyed and rebuilt
         // on every back-press and swipe-away while playback keeps running,
@@ -64,6 +73,9 @@ class FlastNativeActivity : NativeActivity() {
     private external fun jniRescanMusic()
     private external fun jniSetDacQuestionPending(pending: Boolean)
     private external fun jniSetStoragePermission(granted: Boolean)
+    private external fun jniInitStorage(dir: String)
+    private external fun jniGetDacAnswer(vendorId: Int, productId: Int): Int
+    private external fun jniSaveDacAnswer(vendorId: Int, productId: Int, hasOwnControl: Boolean)
 
     private lateinit var audioManager: AudioManager
     private lateinit var usbDacDetector: UsbDacDetector
@@ -97,11 +109,14 @@ class FlastNativeActivity : NativeActivity() {
         else true
 
     private fun requestMissingPermissions() {
-        val missing = mutableListOf<String>()
+        // Plain java.util + a hand-built array on purpose: mutableListOf and
+        // toTypedArray are kotlin.collections calls, and this app ships no
+        // kotlin-stdlib worth speaking of any more.
+        val missing = java.util.ArrayList<String>(2)
         if (!hasStoragePermission()) missing.add(neededStoragePermission())
         if (!hasNotificationPermission()) missing.add(Manifest.permission.POST_NOTIFICATIONS)
-        if (missing.isNotEmpty()) {
-            requestPermissions(missing.toTypedArray(), PERMISSIONS_REQUEST_CODE)
+        if (!missing.isEmpty()) {
+            requestPermissions(missing.toArray(arrayOfNulls<String>(missing.size)), PERMISSIONS_REQUEST_CODE)
         }
     }
 
@@ -159,7 +174,8 @@ class FlastNativeActivity : NativeActivity() {
         usbDacConnected = true
         currentDacVid = vendorId
         currentDacPid = productId
-        val saved = DacVolumePrefs.getSavedAnswer(this, vendorId, productId)
+        val savedCode = jniGetDacAnswer(vendorId, productId)
+        val saved: Boolean? = if (savedCode < 0) null else savedCode == 1
         if (saved == null) {
             // Blocks playback (and now also pauses it, see
             // pc_set_dac_blocked) and raises the native question screen.
@@ -202,13 +218,13 @@ class FlastNativeActivity : NativeActivity() {
     // APIs with no NDK equivalent (spec 3.0).
     //
     // Runs on the native UI thread, not the main thread. Both calls below
-    // are safe there: DacVolumePrefs is plain file I/O, and
+    // are safe there: the answer is persisted by music_library.c, and
     // AudioManager.setStreamVolume has no looper affinity.
     fun jniAnswerDacVolume(hasOwnControl: Boolean) {
         val vid = currentDacVid
         val pid = currentDacPid
         if (vid != null && pid != null) {
-            DacVolumePrefs.saveAnswer(this, vid, pid, hasOwnControl)
+            jniSaveDacAnswer(vid, pid, hasOwnControl)
         }
         currentDacHasOwnVolumeControl = hasOwnControl
         jniSetDacBlocked(false)
@@ -240,25 +256,35 @@ class FlastNativeActivity : NativeActivity() {
         // match on older releases, but referencing them unguarded below
         // minSdk is the kind of thing that is correct today and a
         // NoSuchFieldError after some future refactor.
-        val bleTypes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-            setOf(AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER)
-        else emptySet()
-        bluetoothAudioActive = devices.any {
-            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || it.type in bleTypes
+        val bleAware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        var bt = false
+        for (d in devices) {
+            if (d.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                (bleAware && (d.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                              d.type == AudioDeviceInfo.TYPE_BLE_SPEAKER))) {
+                bt = true
+                break
+            }
         }
+        bluetoothAudioActive = bt
     }
 
-    fun jniGetBitPerfectStateForNative(isBitPerfectNative: Boolean): Int {
+    // 0 = YES, 1 = PARTIAL, 2 = NO.
+    fun jniGetBitPerfectStateForNative(nativeReason: Int): Int {
         if (bluetoothAudioActive) return 2
         if (!usbDacConnected) return 2
-        if (!isBitPerfectNative) return 2
+        if (nativeReason != BP_OK) return 2
         val ownControl = currentDacHasOwnVolumeControl == true
         val vol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         return if (ownControl || vol >= maxVol) 0 else 1
     }
 
-    fun jniGetBitPerfectReason(isBitPerfectNative: Boolean): String {
+    // Ordered so the most specific true statement wins. A file whose
+    // channel layout had to be converted is not failing because of the
+    // manufacturer's audio driver, and saying so would send the user
+    // chasing a phone problem that does not exist.
+    fun jniGetBitPerfectReason(nativeReason: Int): String {
         return when {
             bluetoothAudioActive ->
                 "Bluetooth active -- Bluetooth audio is never bit-perfect " +
@@ -266,9 +292,25 @@ class FlastNativeActivity : NativeActivity() {
             !usbDacConnected ->
                 "No USB DAC connected -- playing through the phone's internal " +
                     "output, no bit-perfect path possible."
-            !isBitPerfectNative ->
+            nativeReason == BP_CHANNELS_CONVERTED ->
+                "This file's channels had to be converted to match your DAC " +
+                    "-- a 5.1 or 7.1 file folded down to stereo, or a mono file " +
+                    "spread across two channels. What reaches the DAC is a mix " +
+                    "of the file's channels, not the file's channels. Nothing " +
+                    "is wrong with your phone or your DAC; a stereo file will " +
+                    "play bit-perfect."
+            nativeReason == BP_RATE_CONVERTED ->
+                "This file's sample rate had to be converted to one your DAC " +
+                    "accepts, which resamples every value. A file at a rate the " +
+                    "DAC supports natively will play bit-perfect."
+            nativeReason == BP_FORMAT_TOO_SMALL ->
+                "The audio format this device granted cannot carry every bit of " +
+                    "this file, so the low bits are being dropped."
+            nativeReason == BP_NOT_EXCLUSIVE ->
                 "AAudio couldn't open the stream in EXCLUSIVE mode with this DAC -- " +
-                    "the HAL vendor may be blocking that mode (see section 5)."
+                    "the HAL vendor may be blocking that mode."
+            nativeReason == BP_NOT_PLAYING ->
+                "Nothing is playing right now."
             currentDacHasOwnVolumeControl != true &&
                 audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) <
                 audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ->
@@ -281,18 +323,6 @@ class FlastNativeActivity : NativeActivity() {
         }
     }
 
-    // The music library and playlists live entirely in C now
-    // (music_library.c, POSIX opendir/readdir per spec section 3.1).
-    // The eight String[]-marshalling methods that used to be here were
-    // the app's single biggest ART-heap consumer: every one of them
-    // built a Kotlin List<String>, copied it to an Array<String>, and
-    // had the native side copy it again, so a full library existed four
-    // times over at once.
-    //
-    // This is the one thing left that C cannot get for itself reliably:
-    // ANativeActivity::internalDataPath is NULL on some ROMs, and
-    // without it there is nowhere to keep the scan cache or playlists.
-    // Called at most once per process, and only on that fallback path.
     fun jniFilesDir(): String = filesDir.absolutePath
 
     // Which storage volumes exist. The C scanner cannot work this out on
@@ -310,12 +340,13 @@ class FlastNativeActivity : NativeActivity() {
     //     and yields <volume>/Android/data/<pkg>/files, whose volume
     //     root is the first four path segments removed.
     fun jniStorageRoots(): Array<String> {
-        val roots = LinkedHashSet<String>()
+        val roots = java.util.LinkedHashSet<String>()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val sm = getSystemService(Context.STORAGE_SERVICE) as StorageManager
             for (v in sm.storageVolumes) {
-                v.directory?.absolutePath?.let { roots.add(it) }
+                val d = v.directory
+                if (d != null) roots.add(d.absolutePath)
             }
         }
 
@@ -326,12 +357,16 @@ class FlastNativeActivity : NativeActivity() {
             if (cut > 0) roots.add(path.substring(0, cut))
         }
 
-        Log.i(TAG, "jniStorageRoots: ${roots.joinToString()}")
-        return roots.toTypedArray()
+        Log.i(TAG, "jniStorageRoots: " + roots.size + " root(s)")
+        return roots.toArray(arrayOfNulls<String>(roots.size))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Before anything that might read persisted state: the DAC check
+        // below can run before android_main() has initialised storage.
+        jniInitStorage(filesDir.absolutePath)
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -342,8 +377,10 @@ class FlastNativeActivity : NativeActivity() {
         usbDacDetector = UsbDacDetector(this, usbListener)
         usbDacDetector.register()
 
-        usbDacDetector.currentlyConnectedDevices().firstOrNull()?.let {
-            handleDacAttached(it.vendorId, it.productId)
+        val connected = usbDacDetector.currentlyConnectedDevices()
+        if (!connected.isEmpty()) {
+            val d = connected[0]
+            handleDacAttached(d.vendorId, d.productId)
         }
 
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)
