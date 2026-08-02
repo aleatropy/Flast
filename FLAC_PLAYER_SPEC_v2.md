@@ -1,356 +1,356 @@
-# Especificación de Producto y Arquitectura Técnica — v2.0
-## Reproductor FLAC Bit-Perfect de Mínimo Consumo Absoluto (Proyecto Open Source)
+# Product Specification and Technical Architecture — v2.0
+## Absolute Minimum-Footprint Bit-Perfect FLAC Player (Open Source Project)
 
-**Versión:** 2.0 — Reemplaza a v1.0 (uso personal único) tras cambio de alcance a proyecto público
-**Fecha:** 2026-07-27
-**Cambio de contexto respecto a v1.0:** este documento asume que el proyecto pasa de "herramienta de uso personal" a **software libre, de código abierto, publicado para cualquier usuario**, manteniendo desarrollo y mantenimiento por el equipo original. Esto introduce obligaciones que v1.0 no tenía: soporte a hardware desconocido, comunicación honesta de limitaciones a usuarios que no son el propio equipo, y mantenibilidad del código para posibles contribuidores externos.
-
----
-
-## 0. Filosofía del proyecto — actualizada para contexto público
-
-Sigue vigente el principio de v1.0: **cada línea de código que no sirve directamente a "decodificar FLAC → entregar PCM intacto al DAC → controles básicos de transporte" es candidata a eliminación.** A esto se añade, por el cambio a proyecto público:
-
-**Principio nuevo — Honestidad ante todo lo demás:** cuando existe tensión entre "prometer una función perfecta" y "admitir públicamente una limitación real", este proyecto elige siempre la segunda opción, incluso si eso genera peores reviews o comparaciones desfavorables con apps comerciales que no son transparentes sobre sus propias limitaciones. Esto no es una postura moral abstracta — es una decisión de arquitectura con consecuencias de diseño concretas, detalladas en la sección 6 (Documento de Transparencia Pública).
-
-**Advertencia de complejidad reconocida:** la decisión de construir la UI completa en C/C++ nativo sobre NDK (sección 3, sin usar el framework de UI de Android) es la decisión de mayor riesgo técnico y de mantenibilidad de todo este documento. Se mantiene porque el usuario la confirmó explícitamente tras conocer el costo completo, no porque sea la ruta más segura. **Cualquier persona retomando este documento debe leer la sección 3.0 completa antes de escribir código**, porque ahí se detalla exactamente qué se está sacrificando a cambio del ahorro de RAM.
+**Version:** 2.0 — Supersedes v1.0 (single personal use) following the change of scope to a public project
+**Date:** 2026-07-27
+**Change of context with respect to v1.0:** this document assumes the project moves from "personal-use tool" to **free, open-source software, published for any user**, with development and maintenance still carried out by the original team. This introduces obligations v1.0 did not have: support for unknown hardware, honest communication of limitations to users who are not the team itself, and code maintainability for possible outside contributors.
 
 ---
 
-## 1. Alcance funcional
+## 0. Project philosophy — updated for a public context
 
-Sin cambios respecto a v1.0 en la lista de funciones (Play/Pause/Next/Previous, 3 secciones, escaneo recursivo de `Music/`, playlists por ruta de archivo, indicador bit-perfect, sin metadata, sin EQ, sin red). Ver v1.0 secciones 1.1-1.3 para la lista completa y exhaustiva — no se repite aquí para evitar duplicación y desincronización entre documentos. **Este documento v2.0 solo especifica lo que cambia: arquitectura técnica, target de Android, y obligaciones de transparencia.**
+The v1.0 principle still stands: **every line of code that does not directly serve "decode FLAC → deliver untouched PCM to the DAC → basic transport controls" is a candidate for deletion.** To this, the move to a public project adds:
 
-Cambio explícito de este documento respecto a v1.0 sección 1.2: se elimina la sugerencia de `MediaSession` mínimo para lockscreen (que en v1.0 quedó como sugerencia abierta) — en la arquitectura 100% nativa de este documento, cada componente del framework Android que se toca (incluido MediaSession) tiene costo de mantenimiento e integración JNI. Se marca como **`[DECISIÓN PENDIENTE — evaluar en Beta]`**, no incluido en el MVP inicial.
+**New principle — Honesty above all else:** when there is tension between "promising a perfect feature" and "publicly admitting a real limitation", this project always chooses the second, even if that produces worse reviews or unfavourable comparisons against commercial apps that are not transparent about their own limitations. This is not an abstract moral stance — it is an architectural decision with concrete design consequences, detailed in section 6 (Public Transparency Document).
 
----
-
-## 2. Target de plataforma — Decisión tomada
-
-**Android 8.0 (API 26) como mínimo soportado.** `[ACTUALIZADO — reemplaza la decisión original de API 31]`
-
-**Decisión original de este documento:** Android 12 (API 31), excluyendo explícitamente todo dispositivo con Android 11 o anterior.
-
-**Por qué cambió:** la justificación de la sección 2.1 nunca fue "AAudio no existe antes de API 31" — AAudio existe desde API 26. Era una apuesta sobre la *madurez* de las implementaciones de EXCLUSIVE/MMAP en HALs viejos. Esa apuesta tenía sentido cuando un HAL inmaduro significaba que la app **no reproducía absolutamente nada**: el código pedía EXCLUSIVE + PCM_I32 y devolvía error si no lo conseguía. Existe una cadena de degradación explícita (EXCLUSIVE → SHARED, ver sección 3.6) que reproduce igual y reporta `BIT-PERFECT: NO` con honestidad. Con eso, el argumento para excluir Android 8-11 desapareció: esos dispositivos ahora obtienen exactamente el comportamiento que la sección 3.6 ya describía para cualquier HAL que no conceda modo exclusivo.
-
-**Por qué API 26 y no más abajo:** es el piso real de AAudio, no una preferencia. Verificado compilando toda la capa nativa con `-Werror=unguarded-availability` contra API 21, 23, 26, 29, 30 y 31: limpia desde 26, falla en 23 y anteriores sobre `AAudio_createStreamBuilder`, `AAudioStream_close` y compañía. Bajar de ahí exigiría un segundo backend de audio sobre OpenSL ES, que **no puede** ser bit-perfect — sería otro producto, no un port.
-
-**Costo asumido y declarado:** la superficie de prueba crece a Android 8-16. El equipo no puede probar todas esas versiones, y eso se comunica públicamente igual que se comunica la fragmentación de HAL de la sección 5.
-
-### 2.1 Justificación técnica (para el documento de transparencia pública, sección 6)
-
-`[NOTA: el razonamiento que sigue es el que sustentaba la decisión original de API 31. Se conserva textualmente por transparencia — la sección 6 exige no reescribir la historia de las decisiones — pero ya no es la decisión vigente. Ver arriba.]`
-
-- Las APIs de AAudio EXCLUSIVE/MMAP existen desde API 26, pero su estabilidad práctica y la calidad de implementación por parte de los fabricantes de HAL mejora notablemente en versiones más recientes — API 31 es un punto de corte razonable donde la mayoría de HALs activos en el mercado ya tienen implementaciones más maduras, aunque **esto no es una garantía absoluta y varía por fabricante** (ver sección 5, la fragmentación del HAL no desaparece por elegir una API más alta, solo se reduce estadísticamente).
-- `[VERIFICAR EN IMPLEMENTACIÓN]`: confirmar si `MIXER_BEHAVIOR_BIT_PERFECT` (introducida en API 34) debe ser un requisito adicional de versión mínima, o si se trata como mejora opcional en dispositivos que la soporten, con AAudio EXCLUSIVE (disponible desde API 26) como base mínima funcional en toda la API 31+.
-- Excluir Android 11 y anteriores es una decisión consciente de reducir alcance de mercado a cambio de reducir superficie de pruebas y de bugs de compatibilidad — se declara así de forma explícita y pública, no oculta.
-
-### 2.2 Dispositivo de desarrollo vs. audiencia objetivo
-
-El **Galaxy A55 (Exynos 1480)** es el dispositivo de desarrollo y pruebas del equipo — es donde se valida la arquitectura, no una limitación de a quién sirve la app. La audiencia objetivo es **cualquier dispositivo Android con API 26+** (actualizado; era API 31+), sin exclusión por marca o SoC, con la única excepción reconocida y documentada de dispositivos donde el fabricante bloqueó el modo AAudio EXCLUSIVE a nivel de HAL/firmware (ver sección 5, fragmentación de hardware) — en esos casos la app sigue funcionando en modo SHARED, solo que sin bit-perfect, comunicado con total claridad vía el indicador (sección 3.6).
+**Acknowledged complexity warning:** the decision to build the entire UI in native C/C++ on the NDK (section 3, without using Android's UI framework) is the highest technical and maintainability risk in this whole document. It stands because the user confirmed it explicitly after learning the full cost, not because it is the safer route. **Anyone picking this document up must read all of section 3.0 before writing code**, because that is where exactly what is being sacrificed in exchange for the RAM saving is spelled out.
 
 ---
 
-## 3. Arquitectura técnica — Cambio fundamental respecto a v1.0
+## 1. Functional scope
 
-### 3.0 Qué se está decidiendo aquí y qué implica (leer antes de cualquier otra subsección)
+No change from v1.0 in the feature list (Play/Pause/Next/Previous, 3 sections, recursive scan of `Music/`, playlists by file path, bit-perfect indicator, no metadata, no EQ, no network). See v1.0 sections 1.1-1.3 for the complete and exhaustive list — it is not repeated here to avoid duplication and drift between documents. **This v2.0 document specifies only what changes: technical architecture, Android target, and transparency obligations.**
 
-v1.0 dejaba abierta la pregunta de Compose vs Views (ambas corren sobre el framework estándar de Android con runtime Kotlin/Java). Este documento v2.0 va más allá: **la interfaz de usuario completa se implementa en C/C++ vía NDK, sin el framework de UI de Android (`android.view`, Compose, o cualquier variante).**
+Explicit change in this document with respect to v1.0 section 1.2: the suggestion of a minimal `MediaSession` for the lock screen is dropped (in v1.0 it was left as an open suggestion) — in the 100% native architecture of this document, every Android framework component touched (including MediaSession) carries maintenance and JNI integration cost. It is marked as **`[PENDING DECISION — evaluate at Beta]`**, not included in the initial MVP.
 
-Esto significa, en términos concretos de qué hay que construir que normalmente Android da gratis:
+---
 
-| Lo que Android normalmente provee | Lo que este proyecto debe construir desde cero |
+## 2. Platform target — Decision made
+
+**Android 8.0 (API 26) as the minimum supported.** `[UPDATED — replaces the original API 31 decision]`
+
+**This document's original decision:** Android 12 (API 31), explicitly excluding every device on Android 11 or earlier.
+
+**Why it changed:** the justification in section 2.1 was never "AAudio does not exist before API 31" — AAudio has existed since API 26. It was a bet on the *maturity* of EXCLUSIVE/MMAP implementations in older HALs. That bet made sense when an immature HAL meant the app **played absolutely nothing**: the code asked for EXCLUSIVE + PCM_I32 and returned an error if it did not get it. There is now an explicit degradation chain (EXCLUSIVE → SHARED, see section 3.6) that plays regardless and honestly reports `BIT-PERFECT: NO`. With that in place, the argument for excluding Android 8-11 disappeared: those devices now get exactly the behaviour section 3.6 already described for any HAL that does not grant exclusive mode.
+
+**Why API 26 and not lower:** it is AAudio's real floor, not a preference. Verified by compiling the entire native layer with `-Werror=unguarded-availability` against API 21, 23, 26, 29, 30 and 31: clean from 26, failing on 23 and earlier over `AAudio_createStreamBuilder`, `AAudioStream_close` and company. Going below that would require a second audio backend on OpenSL ES, which **cannot** be bit-perfect — that would be a different product, not a port.
+
+**Cost accepted and declared:** the testing surface grows to Android 8-16. The team cannot test all those versions, and that is communicated publicly the same way the HAL fragmentation of section 5 is.
+
+### 2.1 Technical justification (for the public transparency document, section 6)
+
+`[NOTE: the reasoning that follows is what supported the original API 31 decision. It is preserved verbatim for transparency — section 6 requires not rewriting the history of decisions — but it is no longer the standing decision. See above.]`
+
+- The AAudio EXCLUSIVE/MMAP APIs have existed since API 26, but their practical stability and the implementation quality on the part of HAL manufacturers improves noticeably in more recent versions — API 31 is a reasonable cut-off point where most HALs active in the market already have more mature implementations, although **this is not an absolute guarantee and varies by manufacturer** (see section 5; HAL fragmentation does not disappear by choosing a higher API, it is only statistically reduced).
+- `[VERIFY DURING IMPLEMENTATION]`: confirm whether `MIXER_BEHAVIOR_BIT_PERFECT` (introduced in API 34) should be an additional minimum-version requirement, or whether it is treated as an optional improvement on devices that support it, with AAudio EXCLUSIVE (available since API 26) as the minimum functional baseline across all of API 31+.
+- Excluding Android 11 and earlier is a conscious decision to reduce market reach in exchange for reducing the testing surface and compatibility bugs — it is declared explicitly and publicly, not hidden.
+
+### 2.2 Development device vs. target audience
+
+The **Galaxy A55 (Exynos 1480)** is the team's development and testing device — it is where the architecture is validated, not a limitation on who the app serves. The target audience is **any Android device on API 26+** (updated; it was API 31+), with no exclusion by brand or SoC, with the single acknowledged and documented exception of devices where the manufacturer blocked AAudio EXCLUSIVE mode at the HAL/firmware level (see section 5, hardware fragmentation) — in those cases the app still works in SHARED mode, only without bit-perfect, communicated with complete clarity via the indicator (section 3.6).
+
+---
+
+## 3. Technical architecture — Fundamental change with respect to v1.0
+
+### 3.0 What is being decided here and what it implies (read before any other subsection)
+
+v1.0 left the Compose vs Views question open (both run on the standard Android framework with the Kotlin/Java runtime). This v2.0 document goes further: **the entire user interface is implemented in C/C++ via the NDK, without Android's UI framework (`android.view`, Compose, or any variant).**
+
+In concrete terms, here is what has to be built that Android normally provides for free:
+
+| What Android normally provides | What this project must build from scratch |
 |---|---|
-| Manejo de touch events (`onTouchEvent`, gestos) | Lectura de eventos táctiles crudos vía `AInputQueue`/`ANativeActivity`, interpretación manual de tap/hold |
-| Renderizado de texto con fuentes del sistema | Motor de renderizado de texto propio (ej. `stb_truetype` o similar librería mínima en C, o rasterización manual de una fuente bitmap embebida — ver 3.3) |
-| Ciclo de vida (`onPause`/`onResume`/rotación/multitarea) | Manejo manual de callbacks de `ANativeActivity` (`onPause`, `onResume`, `onWindowFocusChanged`) |
-| Layout automático (constraints, flexbox) | Posicionamiento manual de elementos de texto en coordenadas fijas o calculadas a mano |
-| Notificaciones / Foreground Service | **Esto NO tiene equivalente NDK puro** — requiere un mínimo de código Java/Kotlin (ver 3.1) porque `NotificationManager` y `Service` son clases del framework sin bypass nativo documentado ni soportado |
-| Detección USB (`UsbManager`) | Mismo caso — requiere puente JNI hacia la API Java de `UsbManager`, no hay forma de evitar esto completamente |
+| Touch event handling (`onTouchEvent`, gestures) | Reading raw touch events via `AInputQueue`/`ANativeActivity`, manual interpretation of tap/hold |
+| Text rendering with system fonts | Its own text rendering engine (e.g. `stb_truetype` or a similarly minimal C library, or manual rasterisation of an embedded bitmap font — see 3.3) |
+| Lifecycle (`onPause`/`onResume`/rotation/multitasking) | Manual handling of `ANativeActivity` callbacks (`onPause`, `onResume`, `onWindowFocusChanged`) |
+| Automatic layout (constraints, flexbox) | Manual positioning of text elements at fixed or hand-calculated coordinates |
+| Notifications / Foreground Service | **This has NO pure-NDK equivalent** — it requires a minimum of Java/Kotlin code (see 3.1) because `NotificationManager` and `Service` are framework classes with no documented or supported native bypass |
+| USB detection (`UsbManager`) | Same case — requires a JNI bridge to the Java `UsbManager` API; there is no way to avoid this entirely |
 
-**Conclusión honesta:** "100% nativo sin ningún Java/Kotlin" no es alcanzable al 100% en Android — el sistema operativo exige algunas interacciones (servicios, notificaciones, USB host) a través de su API Java. Lo que sí es alcanzable, y es lo que este documento especifica, es **minimizar esa capa Java/Kotlin al mínimo absoluto indispensable** (un `ANativeActivity` o Activity-shim mínima, sin ningún framework de UI sobre ella) y hacer que **toda la lógica de negocio, UI, decodificación y audio vivan en C/C++.**
+**Honest conclusion:** "100% native with no Java/Kotlin at all" is not 100% achievable on Android — the operating system demands some interactions (services, notifications, USB host) through its Java API. What *is* achievable, and what this document specifies, is **minimising that Java/Kotlin layer to the absolute indispensable minimum** (an `ANativeActivity` or minimal Activity shim, with no UI framework on top of it) and having **all business logic, UI, decoding and audio live in C/C++.**
 
-### 3.1 Estructura de capas
+### 3.1 Layer structure
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ Capa Java/Kotlin MÍNIMA (indispensable, no evitable) │
-│ - ANativeActivity (o Activity shim mínima)            │
-│ - Foreground Service + Notification (mínima)          │
-│ - Puente JNI hacia UsbManager para detección de DAC   │
-│ - Nada más. Sin ViewModels, sin Fragments, sin        │
-│   ninguna librería de UI de Android.                   │
+│ MINIMAL Java/Kotlin layer (indispensable, unavoidable) │
+│ - ANativeActivity (or minimal Activity shim)          │
+│ - Foreground Service + Notification (minimal)         │
+│ - JNI bridge to UsbManager for DAC detection          │
+│ - Nothing else. No ViewModels, no Fragments, no       │
+│   Android UI library of any kind.                      │
 └─────────────────────────────────────────────────┘
                         │ JNI
 ┌─────────────────────────────────────────────────┐
-│ Capa C/C++ (NDK) — TODO lo demás                       │
-│ - Renderizado de UI directo sobre ANativeWindow/Surface│
-│ - Motor de texto mínimo (fuente bitmap embebida)       │
-│ - Manejo de input táctil                                │
-│ - Escaneo de sistema de archivos (POSIX directo,        │
-│   opendir/readdir recursivo — no File API de Java)      │
-│ - Decodificación FLAC (libFLAC)                          │
-│ - AAudio (apertura de stream, EXCLUSIVE, gestión)        │
-│ - Lectura de VID/PID de dispositivo USB conectado         │
-│   (metadato básico, no parsing de descriptor de audio)    │
-│ - Persistencia de playlists (lectura/escritura de        │
-│   archivos planos vía POSIX, sin SQLite)                 │
+│ C/C++ layer (NDK) — EVERYTHING else                    │
+│ - UI rendering directly onto ANativeWindow/Surface     │
+│ - Minimal text engine (embedded bitmap font)           │
+│ - Touch input handling                                  │
+│ - Filesystem scanning (direct POSIX,                    │
+│   recursive opendir/readdir — not the Java File API)    │
+│ - FLAC decoding (libFLAC)                                │
+│ - AAudio (stream opening, EXCLUSIVE, management)         │
+│ - Reading the VID/PID of the connected USB device         │
+│   (basic metadata, not audio descriptor parsing)          │
+│ - Playlist persistence (reading/writing flat            │
+│   files via POSIX, no SQLite)                           │
 └─────────────────────────────────────────────────┘
 ```
 
-### 3.2 Motor gráfico — decisión de implementación
+### 3.2 Graphics engine — implementation decision
 
-Dos rutas viables, ambas deben evaluarse con una prueba de concepto antes de comprometerse:
+Two viable routes, both of which must be evaluated with a proof of concept before committing:
 
-**Opción A — `ANativeWindow` + rasterización manual (máximo control, máximo esfuerzo):**
-Dibujar directamente sobre el buffer de píxeles del `Surface` vía `ANativeWindow_lock`/`ANativeWindow_unlockAndPost`, sin ninguna librería gráfica intermedia. El texto se dibuja copiando glyphs de una fuente bitmap pre-rasterizada (embebida como array de bytes en el binario, generada una vez en build-time desde una fuente monoespaciada libre como *Terminus* o *Spleen*, ambas diseñadas específicamente para ser bitmap-friendly y extremadamente ligeras). Esto evita cualquier dependencia de librería de fuentes en runtime (nada de FreeType, que pesa varios cientos de KB).
+**Option A — `ANativeWindow` + manual rasterisation (maximum control, maximum effort):**
+Draw directly onto the `Surface`'s pixel buffer via `ANativeWindow_lock`/`ANativeWindow_unlockAndPost`, with no intermediate graphics library. Text is drawn by copying glyphs from a pre-rasterised bitmap font (embedded as a byte array in the binary, generated once at build time from a free monospaced font such as *Terminus* or *Spleen*, both designed specifically to be bitmap-friendly and extremely lightweight). This avoids any runtime font-library dependency (no FreeType, which weighs several hundred KB).
 
-**Opción B — SDL2 mínimo (descartada):**
-Usar SDL2 como capa de abstracción sobre `ANativeWindow` e input hubiera añadido ~300-500KB a cambio de menos código propio que mantener. Se descarta explícitamente en favor de la Opción A.
+**Option B — minimal SDL2 (discarded):**
+Using SDL2 as an abstraction layer over `ANativeWindow` and input would have added ~300-500 KB in exchange for less code of our own to maintain. It is explicitly discarded in favour of Option A.
 
-**DECISIÓN CONFIRMADA: Opción A (rasterización manual, sin SDL2 ni ninguna librería gráfica intermedia).** Es la elección final, no una prueba de concepto pendiente. Esto es consistente con la decisión ya tomada en la sección 3.0 de aceptar la complejidad de "C/C++ para todo" a cambio del máximo ahorro posible de tamaño y RAM — introducir SDL2 en este punto reintroduciría parte del peso que la decisión de UI 100% nativa buscaba eliminar. Quien implemente esta sección debe construir, desde cero: lectura de eventos táctiles vía `AInputQueue`/`ANativeActivity`, rasterización de texto copiando glyphs de la fuente bitmap embebida (sección 3.3) directamente sobre el buffer de `ANativeWindow`, y posicionamiento manual de los elementos de la UI (sin motor de layout).
+**CONFIRMED DECISION: Option A (manual rasterisation, no SDL2 and no intermediate graphics library).** This is the final choice, not a pending proof of concept. It is consistent with the decision already taken in section 3.0 to accept the complexity of "C/C++ for everything" in exchange for the maximum possible saving in size and RAM — introducing SDL2 at this point would reintroduce part of the weight the 100% native UI decision set out to eliminate. Whoever implements this section must build, from scratch: reading touch events via `AInputQueue`/`ANativeActivity`, text rasterisation by copying glyphs from the embedded bitmap font (section 3.3) directly onto the `ANativeWindow` buffer, and manual positioning of the UI elements (no layout engine).
 
-### 3.3 Fuente tipográfica
+### 3.3 Typeface
 
-Dado que no se usan fuentes del sistema (evitar esa dependencia de framework), se debe **embeber una única fuente monoespaciada bitmap, libre de licencia restrictiva** (candidatas: *Spleen*, *Terminus*, *Tamzen* — todas diseñadas para terminal/consola, extremadamente ligeras, con licencias permisivas compatibles con distribución open source). El tamaño configurable (sección de UI en v1.0, sección 2.3) se logra reescalando la rasterización bitmap o, si se opta por más de un tamaño base pre-rasterizado, embebiendo 2-3 variantes de tamaño fijo (ej. pequeño/mediano/grande) en vez de escalado dinámico con pérdida de nitidez — a decidir en implementación según qué tan aceptable sea visualmente el escalado simple de bitmap.
+Since system fonts are not used (to avoid that framework dependency), **a single monospaced bitmap font, free of restrictive licensing, must be embedded** (candidates: *Spleen*, *Terminus*, *Tamzen* — all designed for terminal/console use, extremely lightweight, with permissive licences compatible with open-source distribution). The configurable size (UI section in v1.0, section 2.3) is achieved by rescaling the bitmap rasterisation or, if more than one pre-rasterised base size is chosen, by embedding 2-3 fixed-size variants (e.g. small/medium/large) instead of dynamic scaling with loss of sharpness — to be decided during implementation according to how visually acceptable simple bitmap scaling turns out to be.
 
-### 3.4 Todo lo especificado en v1.0 sección 3 (audio) permanece sin cambios
+### 3.4 Everything specified in v1.0 section 3 (audio) remains unchanged
 
-La arquitectura de audio (libFLAC vía JNI/NDK, AAudio EXCLUSIVE con verificación real de `isMMapUsed()`, control de volumen vía USB Audio Class con las mismas reglas de no-atenuación-digital, indicador bit-perfect) **no cambia en absoluto** con este rediseño de UI — de hecho se simplifica ligeramente, porque ahora toda la cadena desde decodificación hasta entrega a AAudio vive en la misma capa C/C++, sin cruzar el límite JNI para cada operación de audio (solo se cruza para las interacciones indispensables con el framework: Service/Notification/USB, como se detalla en 3.1).
+The audio architecture (libFLAC via JNI/NDK, AAudio EXCLUSIVE with real verification of `isMMapUsed()`, volume control via USB Audio Class with the same no-digital-attenuation rules, bit-perfect indicator) **does not change at all** with this UI redesign — in fact it is slightly simplified, because now the entire chain from decoding to delivery to AAudio lives in the same C/C++ layer, without crossing the JNI boundary for every audio operation (it is crossed only for the indispensable framework interactions: Service/Notification/USB, as detailed in 3.1).
 
-### 3.5 Control de volumen — decisión explícita del usuario, no detección automática
+### 3.5 Volume control — explicit user decision, not automatic detection
 
-**Cambio de enfoque respecto a la versión anterior de esta sección:** se descarta la detección automática vía parsing del descriptor USB Audio Class (`FU_VOLUME_CONTROL`). La razón del cambio: parsear descriptores USB crudos es código no trivial con superficie real de error (interpretación incorrecta de bytes, DACs que responden de forma no estándar, bugs de parsing) — exactamente el tipo de complejidad frágil que este proyecto busca evitar. Se reemplaza por una pregunta explícita al usuario, que es simultáneamente más simple de implementar, más confiable (el usuario que tiene el DAC en la mano sabe la respuesta con certeza), y más coherente con el principio de transparencia del proyecto (el usuario entiende por qué la app se comporta como se comporta, porque él mismo lo definió).
+**Change of approach with respect to the previous version of this section:** automatic detection by parsing the USB Audio Class descriptor (`FU_VOLUME_CONTROL`) is discarded. The reason for the change: parsing raw USB descriptors is non-trivial code with a real error surface (incorrect byte interpretation, DACs that respond in non-standard ways, parsing bugs) — exactly the kind of fragile complexity this project seeks to avoid. It is replaced by an explicit question to the user, which is simultaneously simpler to implement, more reliable (the user holding the DAC knows the answer with certainty), and more coherent with the project's transparency principle (the user understands why the app behaves as it does, because they defined it themselves).
 
-**Por qué esta decisión no puede depender de un default silencioso:** hasta que el usuario responde, no hay forma segura de asumir un comportamiento. Un default de "botones activos, volumen de software" contradice la premisa de bit-perfect sin que el usuario lo sepa. Un default de "botones desactivados, PCM al 100%" es un riesgo real de daño auditivo si el DAC/amplificador conectado no tiene ningún control físico propio y el usuario no ha sido advertido — algunos DACs de este segmento entregan varios cientos de mW de potencia de salida, suficiente para ser un problema real con IEMs sensibles a volumen máximo sin control disponible. Por esto, la reproducción se bloquea hasta que la pregunta se responde explícitamente.
+**Why this decision cannot rely on a silent default:** until the user answers, there is no safe way to assume a behaviour. A default of "buttons active, software volume" contradicts the bit-perfect premise without the user knowing. A default of "buttons disabled, PCM at 100%" is a real risk of hearing damage if the connected DAC/amplifier has no physical control of its own and the user has not been warned — some DACs in this segment deliver several hundred mW of output power, enough to be a real problem with IEMs sensitive to maximum volume with no control available. For this reason, playback is blocked until the question is answered explicitly.
 
-**Flujo de primer uso con un DAC:**
+**First-use flow with a DAC:**
 
-1. Al detectar un dispositivo de audio USB conectado por primera vez (identificado por vendor ID + product ID, leídos vía `UsbManager` — esto es lectura estándar y trivial de metadatos USB, no requiere parsear el descriptor de audio completo), la app **no reproduce nada todavía** y presenta, en texto plano, dos líneas de contexto seguidas de la pregunta — no es un tutorial ni onboarding (siguen prohibidos por la sección 0), es la explicación mínima de por qué se bloquea la reproducción para preguntar algo, coherente con el principio de gentileza hacia un usuario que abre la app sin haber leído este documento:
+1. On detecting a USB audio device connected for the first time (identified by vendor ID + product ID, read via `UsbManager` — this is standard, trivial reading of USB metadata and does not require parsing the full audio descriptor), the app **does not play anything yet** and presents, in plain text, two lines of context followed by the question — this is not a tutorial or onboarding (still forbidden by section 0), it is the minimum explanation of why playback is blocked in order to ask something, coherent with the principle of kindness towards a user who opens the app without having read this document:
 
    ```
-   Para proteger tu audición y mantener
-   bit-perfect, necesitamos saber esto
-   una sola vez por cada DAC:
+   To protect your hearing and keep
+   bit-perfect, we need to know this
+   once per DAC:
 
-   ¿Tu DAC permite subir/bajar el volumen
-   directamente (rueda, botones físicos,
-   o app propia del fabricante)?
+   Can your DAC raise/lower the volume
+   directly (wheel, physical buttons,
+   or the manufacturer's own app)?
 
-        [ SI ]        [ NO ]
+        [ YES ]        [ NO ]
    ```
 
-2. Según la respuesta:
-   - **SI** → los botones físicos de volumen del teléfono se interceptan y se deshabilitan por completo para esta app (no hacen nada, ni suben ni bajan nada). `STREAM_MUSIC` se fija al 100% y se bloquea ahí. El usuario controla el volumen directamente desde su DAC (rueda, botón, o su app propietaria — fuera del alcance de esta app). Con esta respuesta, el indicador de la sección 3.6 puede mostrar `BIT-PERFECT: SI` cuando AAudio consiga EXCLUSIVE, ya que el volumen no interfiere con la señal digital.
-   - **NO** → los botones físicos de volumen del teléfono permanecen activos y controlan el volumen estándar de Android. La UI debe mostrar, de forma visible y permanente mientras este DAC esté conectado (sugerido: en la sección CONFIG, junto al detalle del indicador bit-perfect de la sección 3.6), el texto: `Volumen: control por software del sistema — este DAC no tiene control propio configurado, el volumen se ajusta digitalmente antes de llegar al DAC`. Con esta respuesta, el indicador de la sección 3.6 mostrará `BIT-PERFECT: PARCIAL` en cualquier nivel de volumen distinto al 100%, incluso si AAudio consiguió EXCLUSIVE — ver sección 3.6 para el detalle completo de este cruce de estados.
+2. Depending on the answer:
+   - **YES** → the phone's physical volume buttons are intercepted and completely disabled for this app (they do nothing, they neither raise nor lower anything). `STREAM_MUSIC` is pinned to 100% and locked there. The user controls the volume directly from their DAC (wheel, button, or its proprietary app — outside the scope of this app). With this answer, the indicator in section 3.6 may show `BIT-PERFECT: YES` when AAudio obtains EXCLUSIVE, since volume is not interfering with the digital signal.
+   - **NO** → the phone's physical volume buttons remain active and control Android's standard volume. The UI must show, visibly and permanently while this DAC is connected (suggested: in the CONFIG section, next to the bit-perfect indicator detail of section 3.6), the text: `Volume: system software control — this DAC has no control of its own configured, volume is adjusted digitally before reaching the DAC`. With this answer, the indicator in section 3.6 will show `BIT-PERFECT: PARTIAL` at any volume level other than 100%, even if AAudio obtained EXCLUSIVE — see section 3.6 for the full detail of this crossing of states.
 
-3. **La elección se persiste por dispositivo**, indexada por vendor ID + product ID del USB (almacenamiento local mínimo, igual mecanismo que las playlists de la sección 4.3 — un archivo de texto plano). Si el usuario conecta un DAC ya configurado antes, la app aplica la elección guardada sin volver a preguntar. Si conecta un DAC distinto no visto antes, se repite el flujo del punto 1.
+3. **The choice is persisted per device**, indexed by the USB vendor ID + product ID (minimal local storage, the same mechanism as the playlists of section 4.3 — a plain text file). If the user connects a DAC already configured before, the app applies the saved choice without asking again. If they connect a different DAC not seen before, the flow from point 1 repeats.
 
-4. Configuración incluye una opción para revisar/cambiar la respuesta guardada para el DAC actualmente conectado (por si el usuario se equivocó al responder, o el comportamiento real del DAC no coincide con lo que asumió).
+4. Configuration includes an option to review/change the saved answer for the currently connected DAC (in case the user answered incorrectly, or the DAC's real behaviour does not match what they assumed).
 
-**Regla que se mantiene sin cambios respecto a la versión anterior:** bajo ninguna circunstancia la app implementa atenuación digital de software como aproximación a "control de volumen propio" — la única alternativa a control por hardware del DAC es el volumen estándar del sistema Android (rama NO), nunca una implementación propia de atenuación dentro de la app.
+**Rule that stands unchanged with respect to the previous version:** under no circumstances does the app implement software digital attenuation as an approximation of "its own volume control" — the only alternative to hardware control by the DAC is Android's standard system volume (the NO branch), never an in-app attenuation implementation.
 
-### 3.6 Indicador Bit-Perfect en la UI — simplificado con detalle en Configuración, considerando AMBAS fuentes de no-bit-perfect
+### 3.6 Bit-Perfect indicator in the UI — simplified, with detail in Configuration, considering BOTH sources of non-bit-perfect
 
-**Corrección importante respecto al diseño original de esta sección:** bit-perfect no depende únicamente del resultado de AAudio (`isMMapUsed()`) — también depende del estado de volumen de la sección 3.5. Si el usuario respondió "NO" en la pregunta de volumen (su DAC no tiene control propio), el volumen se ajusta mediante atenuación de software del sistema Android, lo cual altera digitalmente la señal PCM en cualquier nivel de volumen distinto al 100% — **incluso si AAudio consiguió EXCLUSIVE perfectamente**. Un indicador que solo refleje el estado de AAudio, ignorando esto, mostraría "SI" en una situación donde el audio real que llega al DAC ya no es bit-perfect, lo cual contradice directamente el principio de honestidad de la sección 0.
+**Important correction with respect to this section's original design:** bit-perfect does not depend solely on AAudio's result (`isMMapUsed()`) — it also depends on the volume state of section 3.5. If the user answered "NO" to the volume question (their DAC has no control of its own), volume is adjusted through Android's system software attenuation, which digitally alters the PCM signal at any volume level other than 100% — **even if AAudio obtained EXCLUSIVE perfectly**. An indicator reflecting only AAudio's state, ignoring this, would show "YES" in a situation where the actual audio reaching the DAC is no longer bit-perfect, which directly contradicts the honesty principle of section 0.
 
-La UI del reproductor muestra uno de tres textos posibles (no dos):
+The player UI shows one of three possible texts (not two):
 
 ```
-BIT-PERFECT: SI
+BIT-PERFECT: YES
 ```
 ```
-BIT-PERFECT: PARCIAL
+BIT-PERFECT: PARTIAL
 ```
 ```
 BIT-PERFECT: NO
 ```
 
-Los tres son **tocables**. Al tocar cualquiera, la app navega a la sección CONFIG, donde se muestra el detalle completo sin ocultar nada — la tabla de estados posibles, ampliada respecto a los 5 de v1.0 sección 3.4 para incluir el cruce con el estado de volumen:
+All three are **tappable**. Tapping any of them navigates to the CONFIG section, where the full detail is shown with nothing hidden — the table of possible states, expanded from the 5 of v1.0 section 3.4 to include the crossing with volume state:
 
-| Estado real | Indicador en player | Texto explicativo en Configuración |
+| Real state | Indicator in player | Explanatory text in Configuration |
 |---|---|---|
-| EXCLUSIVE conseguido, y (volumen del DAC configurado como "SI tiene control propio" **o** volumen del sistema al 100%) | `BIT-PERFECT: SI` | El sistema entrega el audio sin remuestreo ni mezcla, y el volumen no está alterando la señal digital. |
-| EXCLUSIVE conseguido, pero volumen del DAC configurado como "NO tiene control propio" y el volumen actual del sistema **no** está al 100% | `BIT-PERFECT: PARCIAL` | El modo de audio exclusivo funciona, pero el volumen se está ajustando por software antes de llegar al DAC — esto altera la señal digital. Sube el volumen al máximo para bit-perfect real, o usa un DAC con control de volumen propio. |
-| Degradado a SHARED (mixer de Android en uso) | `BIT-PERFECT: NO` | Tu dispositivo está usando el modo compartido del sistema — el audio puede ser remuestreado antes de llegar al DAC. |
-| EXCLUSIVE solicitado pero el dispositivo/HAL no lo soporta en absoluto (`AAudio_getPlatformMMapExclusivePolicy` devuelve `NEVER`) | `BIT-PERFECT: NO` | Este dispositivo no soporta el modo de audio exclusivo a nivel de fabricante/firmware. |
-| Reproduciendo vía Bluetooth | `BIT-PERFECT: NO` | Bluetooth siempre recodifica el audio — bit-perfect no es posible por diseño del protocolo, sin importar la app. |
-| Sin dispositivo de audio USB conectado, usando salida interna del teléfono | `BIT-PERFECT: NO` | Estás usando la salida de audio interna del dispositivo, no un DAC externo. |
+| EXCLUSIVE obtained, and (DAC volume configured as "YES it has its own control" **or** system volume at 100%) | `BIT-PERFECT: YES` | The system delivers the audio with no resampling or mixing, and the volume is not altering the digital signal. |
+| EXCLUSIVE obtained, but DAC volume configured as "NO it has no control of its own" and the current system volume is **not** at 100% | `BIT-PERFECT: PARTIAL` | Exclusive audio mode is working, but volume is being adjusted in software before reaching the DAC — this alters the digital signal. Raise the volume to maximum for real bit-perfect, or use a DAC with its own volume control. |
+| Degraded to SHARED (Android mixer in use) | `BIT-PERFECT: NO` | Your device is using the system's shared mode — the audio may be resampled before reaching the DAC. |
+| EXCLUSIVE requested but the device/HAL does not support it at all (`AAudio_getPlatformMMapExclusivePolicy` returns `NEVER`) | `BIT-PERFECT: NO` | This device does not support exclusive audio mode at the manufacturer/firmware level. |
+| Playing via Bluetooth | `BIT-PERFECT: NO` | Bluetooth always re-encodes audio — bit-perfect is not possible by protocol design, regardless of the app. |
+| No USB audio device connected, using the phone's internal output | `BIT-PERFECT: NO` | You are using the device's internal audio output, not an external DAC. |
 
-Este diseño reduce el ruido visual en la pantalla principal (tres palabras posibles, no una explicación completa) sin perder ni un ápice de transparencia — el detalle completo, incluyendo el cruce correcto entre estado de AAudio y estado de volumen, sigue estando a un solo tap de distancia, nunca oculto ni resumido de forma engañosa.
+This design reduces visual noise on the main screen (three possible words, not a full explanation) without losing an ounce of transparency — the complete detail, including the correct crossing between AAudio state and volume state, remains a single tap away, never hidden or misleadingly summarised.
 
-**Nota de implementación:** el estado PARCIAL requiere que la app pueda leer el volumen actual del stream `STREAM_MUSIC` en tiempo real (no solo al momento de conectar el DAC) para saber si está al 100% o no — esto es una lectura estándar de `AudioManager`, sin complejidad adicional relevante, pero debe evaluarse con qué frecuencia se refresca esta lectura para no introducir polling innecesario (contradiría la sección 4.6 sobre evitar timers periódicos) — la lectura debe ser reactiva a cambios de volumen (`ACTION_VOLUME_CHANGED` o el callback equivalente), no un chequeo periódico.
-
----
-
-### 3.7 Acceso a la carpeta Music/ — Confirmado, sin bloqueo de Scoped Storage
-
-`Music/` es una carpeta de medios reconocida por el propio Android (junto con Alarms/, Audiobooks/, Notifications/, Podcasts/, Ringtones/), lo que la coloca en un régimen distinto al de una carpeta arbitraria del sistema de archivos. Desde Android 11, el kernel virtual FUSE permite que apps bajo Scoped Storage sigan usando File APIs con rutas de archivo directas para este tipo de carpetas reconocidas — es decir, **el escaneo recursivo vía `opendir`/`readdir` en C especificado en la sección 3.1 funciona sin cambios, sin necesidad de Storage Access Framework ni de que el usuario seleccione la carpeta manualmente con un selector del sistema.**
-
-Lo único que varía por versión de Android es qué permiso declarar y solicitar en runtime:
-- **API 26-32 (Android 8 a 12L):** `READ_EXTERNAL_STORAGE`.
-- **API 29 (Android 10) además:** `android:requestLegacyExternalStorage="true"`. Es la única versión donde Scoped Storage bloquea el acceso por ruta directa sin capa FUSE de compatibilidad; sin ese atributo el escaneo no encuentra nada en Android 10 específicamente.
-- **API 33+ (Android 13+):** `READ_MEDIA_AUDIO` (permiso granular específico para audio, más alineado con el principio de pedir solo lo estrictamente necesario).
-
-**No se solicita `MANAGE_EXTERNAL_STORAGE`** ("acceso a todos los archivos") — no es necesario para este caso de uso, y solicitarlo sin necesidad real contradice el principio de transparencia y permisos mínimos de la sección 6. Además, ese permiso requiere un proceso de aprobación especial de Google Play, que no aplica ni conviene a este proyecto.
-
-**Actualización a v1.0 sección 4.2:** el punto marcado como `[VERIFICAR EN IMPLEMENTACIÓN]` sobre Scoped Storage queda resuelto — la arquitectura original de v1.0 (File API directo, sin MediaStore) es correcta y se mantiene sin cambios.
+**Implementation note:** the PARTIAL state requires the app to be able to read the current volume of the `STREAM_MUSIC` stream in real time (not only at the moment the DAC is connected) in order to know whether it is at 100% or not — this is a standard `AudioManager` read, with no relevant additional complexity, but how often this read is refreshed must be evaluated so as not to introduce unnecessary polling (which would contradict section 4.6 on avoiding periodic timers) — the read must be reactive to volume changes (`ACTION_VOLUME_CHANGED` or the equivalent callback), not a periodic check.
 
 ---
 
-### 3.8 Optimizaciones de compilación — último tramo de reducción de tamaño
+### 3.7 Access to the Music/ folder — Confirmed, no Scoped Storage blocking
 
-Estas son optimizaciones concretas, no exploratorias, a aplicar sobre la arquitectura ya definida en las secciones anteriores. A diferencia de las decisiones de 3.0-3.7 (arquitectura), esto es *cómo compilar* esa arquitectura para exprimir el resultado final.
+`Music/` is a media folder recognised by Android itself (alongside Alarms/, Audiobooks/, Notifications/, Podcasts/, Ringtones/), which places it in a different regime from an arbitrary filesystem folder. Since Android 11, the FUSE virtual kernel allows apps under Scoped Storage to keep using File APIs with direct file paths for this kind of recognised folder — that is, **the recursive `opendir`/`readdir` scan in C specified in section 3.1 works unchanged, with no need for the Storage Access Framework and no need for the user to select the folder manually with a system picker.**
 
-### 3.8.1 libFLAC — compilar solo el decoder, nunca el encoder
+The only thing that varies by Android version is which permission to declare and request at runtime:
+- **API 26-32 (Android 8 to 12L):** `READ_EXTERNAL_STORAGE`.
+- **API 29 (Android 10) additionally:** `android:requestLegacyExternalStorage="true"`. It is the only version where Scoped Storage blocks path-based access without the FUSE compatibility layer; without that attribute the scan finds nothing on Android 10 specifically.
+- **API 33+ (Android 13+):** `READ_MEDIA_AUDIO` (a granular audio-specific permission, better aligned with the principle of requesting only what is strictly necessary).
 
-libFLAC incluye tanto encoder como decoder en su código base, pero esta app **nunca necesita codificar FLAC** (solo reproduce archivos ya existentes) — el encoder es peso muerto que nunca se ejecuta. libFLAC soporta compilación condicional para excluir el encoder del binario final (flags de build tipo `--disable-flac-encoder` o el equivalente en el sistema de build usado para compilar contra NDK, según la versión de libFLAC). Un decoder-only build reduce el tamaño del `.so` resultante de forma directa, ya que buena parte del código de predicción LPC, cálculo de tamaño óptimo de frame, y estimación de parámetros de compresión pertenece exclusivamente al lado de codificación.
+**`MANAGE_EXTERNAL_STORAGE` is not requested** ("all files access") — it is not necessary for this use case, and requesting it without real need contradicts the transparency and minimum-permissions principle of section 6. Furthermore, that permission requires a special Google Play approval process, which neither applies to nor suits this project.
 
-También reafirma lo ya especificado en v1.0 sección 3.1: compilar sin soporte Ogg-FLAC (`--disable-ogg` o equivalente), ya que esta app no soporta el contenedor Ogg, solo FLAC nativo.
-
-`[VERIFICAR EN IMPLEMENTACIÓN]`: el mecanismo exacto de build depende de si se usa el sistema de build original de libFLAC (autotools/CMake) cross-compilado para Android vía NDK, o si se opta por extraer manualmente solo los archivos fuente `.c` del decoder (`stream_decoder.c` y sus dependencias directas, excluyendo `stream_encoder.c` y todo lo que solo este último referencia) para compilarlos directamente dentro del proyecto Android sin pasar por el sistema de build genérico de libFLAC — esta segunda opción da más control pero requiere mapear manualmente el árbol de dependencias internas de la librería.
-
-### 3.8.2 Flags de compilador orientadas a tamaño
-
-Compilar el código nativo (capa C/C++ completa: libFLAC decoder-only, AAudio, motor gráfico, lógica de UI) con `-Os` (optimizar para tamaño) en vez de `-O2` (optimizar para velocidad) como flag por defecto del NDK. Dado que la app es ligera en cómputo (decodificar FLAC no es costoso, según se estableció al inicio de este proyecto) y el objetivo explícito es tamaño mínimo, la posible pérdida marginal de velocidad de `-Os` frente a `-O2` no tiene impacto perceptible en la experiencia — sobra margen de CPU de cualquier forma. `[VERIFICAR EN IMPLEMENTACIÓN]`: confirmar con una build de prueba que `-Os` no introduce ninguna regresión perceptible en la decodificación en tiempo real (no debería, dado el bajo costo computacional de FLAC, pero se verifica antes de fijarlo como estándar del proyecto).
-
-### 3.8.3 Strip de símbolos de debug
-
-El binario de release debe compilarse con símbolos de debug eliminados (`strip` sobre el `.so` final, o las flags equivalentes `-s`/`--strip-all` en el linker, y asegurar que Gradle/CMake no empaquete símbolos de debug en el APK de release — revisar configuración de `debuggable false` y `ndk.debugSymbolLevel` según corresponda). Esto no afecta funcionalidad en absoluto, solo reduce el tamaño del binario final al quitar información usada únicamente para depuración con herramientas como `gdb`/`lldb`, irrelevante para un usuario final.
-
-### 3.8.4 R8/ProGuard sobre la capa Java/Kotlin mínima
-
-Aunque la capa Java/Kotlin de este proyecto es mínima (sección 3.1: solo Activity/Service/Notification/puente USB), sigue valiendo la pena aplicar R8 con shrinking agresivo (`minifyEnabled true`, `shrinkResources true`) sobre esa porción — es una ganancia pequeña en términos absolutos dado lo poco que hay que reducir, pero es coherente con el principio de no dejar nada sin optimizar, y el costo de habilitarlo es prácticamente cero (una línea de configuración en el build de release).
+**Update to v1.0 section 4.2:** the point marked `[VERIFY DURING IMPLEMENTATION]` about Scoped Storage is resolved — v1.0's original architecture (direct File API, no MediaStore) is correct and stands unchanged.
 
 ---
 
-### 3.9 Mejoras de usabilidad de biblioteca — confirmadas, con costo de recursos verificado como despreciable
+### 3.8 Compilation optimisations — the last stretch of size reduction
 
-Tras evaluar el costo real de estas tres adiciones (detallado abajo), se confirma su inclusión. El costo combinado (~130-150 KB de RAM adicional, ~15-45 KB de APK adicional) representa menos del 1% del presupuesto de RAM y ~5-10% del presupuesto de APK establecidos en la sección 4 — no compromete el objetivo de mínimo consumo del proyecto. Se descarta explícitamente, por las razones detalladas más abajo, añadir metadata completa (álbum/artista/número de pista) — el costo de recursos de esa adición también sería pequeño, pero el costo real no es de recursos: es de alcance y de expectativa de navegación que empujaría el proyecto hacia el terreno ya ocupado por reproductores convencionales, diluyendo su diferenciador único (bit-perfect + minimalismo radical).
+These are concrete optimisations, not exploratory ones, to be applied on top of the architecture already defined in the preceding sections. Unlike the decisions in 3.0-3.7 (architecture), this is *how to compile* that architecture to squeeze the final result.
 
-### 3.9.1 Estructura de carpetas como jerarquía de navegación
+### 3.8.1 libFLAC — build the decoder only, never the encoder
 
-Reemplaza la lista plana especificada en v1.0 sección 2.2.1. El escaneo recursivo de `Music/` (sección 4.1) ya recorre la estructura de carpetas completa — en vez de aplanar el resultado a una sola lista alfabética, se preserva la jerarquía (carpeta → subcarpetas → archivos) como estructura de navegación en la sección MÚSICA. Esto no introduce ninguna dependencia nueva ni requiere leer metadata — es una reestructuración de cómo se almacena y navega la misma información que el escaneo ya produce.
+libFLAC includes both encoder and decoder in its code base, but this app **never needs to encode FLAC** (it only plays existing files) — the encoder is dead weight that never runs. libFLAC supports conditional compilation to exclude the encoder from the final binary (build flags of the `--disable-flac-encoder` kind, or the equivalent in whichever build system is used to compile against the NDK, depending on the libFLAC version). A decoder-only build directly reduces the size of the resulting `.so`, since a good part of the LPC prediction code, optimal frame size calculation, and compression parameter estimation belongs exclusively to the encoding side.
 
-**Costo verificado:** ~10-20 KB de RAM adicional (punteros de árbol sobre una biblioteca de referencia de ~3,000 archivos en ~200 carpetas), ~5-10 KB de APK adicional. Despreciable.
+It also reaffirms what v1.0 section 3.1 already specified: build without Ogg-FLAC support (`--disable-ogg` or equivalent), since this app does not support the Ogg container, only native FLAC.
 
-### 3.9.2 Título del tag Vorbis Comment, con fallback obligatorio al nombre de archivo
+`[VERIFY DURING IMPLEMENTATION]`: the exact build mechanism depends on whether libFLAC's original build system (autotools/CMake) is cross-compiled for Android via the NDK, or whether one chooses to manually extract only the decoder's `.c` source files (`stream_decoder.c` and its direct dependencies, excluding `stream_encoder.c` and everything only the latter references) and compile them directly inside the Android project without going through libFLAC's generic build system — this second option gives more control but requires manually mapping the library's internal dependency tree.
 
-Se lee **únicamente el campo `TITLE`** del bloque de metadata Vorbis Comment de cada FLAC (no artista, no álbum, no ningún otro campo) durante el escaneo. Si el campo no existe en el archivo, se muestra el nombre de archivo tal cual (comportamiento de v1.0 sección 2.5, que se mantiene como fallback, no se elimina).
+### 3.8.2 Size-oriented compiler flags
 
-- El parser de Vorbis Comments ya es parte de libFLAC, la misma librería enlazada para decodificar audio — no se añade ninguna dependencia nueva. `[VERIFICAR EN IMPLEMENTACIÓN]`: confirmar que el build decoder-only especificado en la sección 3.8.1 no excluye accidentalmente las funciones de parsing de metadata junto con el encoder — son rutas de código distintas dentro de libFLAC y deben verificarse por separado.
-- **Costo verificado:** ~120 KB de RAM adicional (3,000 canciones × ~40 bytes por título), incremento de APK despreciable dado que el código ya está en libFLAC.
-- **Costo real a gestionar:** no es de RAM ni de APK, es de tiempo de escaneo — leer el bloque de metadata de cada archivo durante el escaneo inicial añade I/O que no existe en la v1.0 original (que solo lee el nombre de archivo del sistema de archivos, sin abrir el contenido). Esto se neutraliza con la sección 3.9.3 (caché).
+Compile the native code (the complete C/C++ layer: decoder-only libFLAC, AAudio, graphics engine, UI logic) with `-Os` (optimise for size) instead of `-O2` (optimise for speed) as the NDK's default flag. Given that the app is light on computation (decoding FLAC is not expensive, as established at the start of this project) and the explicit objective is minimum size, the possible marginal loss of speed from `-Os` versus `-O2` has no perceptible impact on the experience — there is CPU headroom to spare either way. `[VERIFY DURING IMPLEMENTATION]`: confirm with a test build that `-Os` introduces no perceptible regression in real-time decoding (it should not, given FLAC's low computational cost, but this is verified before fixing it as the project standard).
 
-### 3.9.3 Caché de resultado de escaneo entre sesiones
+### 3.8.3 Stripping debug symbols
 
-Actualiza v1.0 sección 4.1, que dejaba esto como pendiente de verificar según el volumen de archivos esperado. Se confirma su inclusión desde el diseño inicial, dado que ahora el escaneo incluye lectura de metadata (3.9.2), lo que hace el caché más valioso que en la versión solo-nombre-de-archivo.
+The release binary must be compiled with debug symbols removed (`strip` on the final `.so`, or the equivalent `-s`/`--strip-all` linker flags, and ensuring Gradle/CMake does not package debug symbols into the release APK — review the `debuggable false` and `ndk.debugSymbolLevel` configuration as appropriate). This does not affect functionality at all, it only reduces the final binary size by removing information used solely for debugging with tools such as `gdb`/`lldb`, irrelevant to an end user.
 
-- Persistencia en almacenamiento interno de la app: un archivo de texto plano con una entrada por canción (ruta absoluta + título cacheado), estructurado de forma simple para lectura/escritura rápida.
-- Invalidación: comparar timestamp de última modificación de la carpeta `Music/` (y subcarpetas relevantes) contra la fecha del caché guardado; si hay archivos nuevos o modificados, re-escanear solo lo necesario en vez de la biblioteca completa (`[VERIFICAR EN IMPLEMENTACIÓN]`: definir si la invalidación es de grano fino, por subcarpeta, o de grano grueso, biblioteca completa — grano fino es más eficiente pero más complejo de implementar correctamente).
-- Se mantiene la opción manual de refresco (v1.0 sección 4.1, `[ACTUALIZAR]`) para el caso donde el usuario añade archivos y quiere verlos sin esperar a la próxima detección automática de cambios.
-- **Costo verificado:** ~0 KB de RAM adicional en tiempo de ejecución (es la misma información ya en memoria, solo que además persistida), ~240 KB en disco del dispositivo del usuario (no cuenta contra el tamaño del APK), ~10-15 KB de APK adicional por la lógica de lectura/escritura/invalidación.
+### 3.8.4 R8/ProGuard on the minimal Java/Kotlin layer
 
-### 3.9.4 Metadata completa (álbum, artista, número de pista) — descartada, y por qué (registro para el documento de transparencia, sección 6)
-
-Se evaluó explícitamente y se descarta, **no por costo de recursos** (verificado como pequeño, del mismo orden que 3.9.1-3.9.3) sino por costo de alcance: mostrar álbum y artista crea una expectativa natural de navegación por álbum/artista, lo que empujaría el rediseño de la sección MÚSICA hacia un paradigma de biblioteca convencional — el terreno donde Musicolet, Poweramp y otros reproductores ya compiten bien. El diferenciador de este proyecto es la combinación específica de bit-perfect real y minimalismo radical; diluir el segundo para parecerse más a la competencia en organización de biblioteca reduce la razón de ser del proyecto en vez de fortalecerla. Esta decisión debe comunicarse explícitamente en el documento de transparencia pública (sección 6) como una elección deliberada de producto, no como una limitación técnica no resuelta ni una omisión por descuido.
+Although this project's Java/Kotlin layer is minimal (section 3.1: only Activity/Service/Notification/USB bridge), it is still worth applying R8 with aggressive shrinking (`minifyEnabled true`, `shrinkResources true`) over that portion — it is a small gain in absolute terms given how little there is to reduce, but it is coherent with the principle of leaving nothing unoptimised, and the cost of enabling it is practically zero (one configuration line in the release build).
 
 ---
 
-## 4. Estimaciones de tamaño y RAM — versión C/C++ nativo puro
+### 3.9 Library usability improvements — confirmed, with resource cost verified as negligible
 
-Con la advertencia de que estas cifras dependen fuertemente de cuál opción de motor gráfico (3.2) se elija, y siguen siendo estimaciones de ingeniería, no medición real:
+After evaluating the real cost of these three additions (detailed below), their inclusion is confirmed. The combined cost (~130-150 KB of additional RAM, ~15-45 KB of additional APK) represents less than 1% of the RAM budget and ~5-10% of the APK budget established in section 4 — it does not compromise the project's minimum-footprint objective. Adding full metadata (album/artist/track number) is explicitly discarded for the reasons detailed further below — the resource cost of that addition would also be small, but the real cost is not resources: it is scope and the navigation expectation it would create, which would push the project towards territory already occupied by conventional players, diluting its unique differentiator (bit-perfect + radical minimalism).
 
-| Componente | Estimación |
+### 3.9.1 Folder structure as a navigation hierarchy
+
+Replaces the flat list specified in v1.0 section 2.2.1. The recursive scan of `Music/` (section 4.1) already walks the complete folder structure — instead of flattening the result into a single alphabetical list, the hierarchy (folder → subfolders → files) is preserved as a navigation structure in the MUSIC section. This introduces no new dependency and does not require reading metadata — it is a restructuring of how the same information the scan already produces is stored and browsed.
+
+**Verified cost:** ~10-20 KB of additional RAM (tree pointers over a reference library of ~3,000 files in ~200 folders), ~5-10 KB of additional APK. Negligible.
+
+### 3.9.2 Vorbis Comment TITLE tag, with mandatory fallback to the filename
+
+**Only the `TITLE` field** of each FLAC's Vorbis Comment metadata block is read (not artist, not album, no other field) during the scan. If the field does not exist in the file, the filename is shown as is (v1.0 section 2.5 behaviour, which is kept as a fallback, not removed).
+
+- The Vorbis Comments parser is already part of libFLAC, the same library linked for decoding audio — no new dependency is added. `[VERIFY DURING IMPLEMENTATION]`: confirm that the decoder-only build specified in section 3.8.1 does not accidentally exclude the metadata parsing functions along with the encoder — they are distinct code paths within libFLAC and must be verified separately.
+- **Verified cost:** ~120 KB of additional RAM (3,000 songs × ~40 bytes per title), negligible APK increase given the code is already in libFLAC.
+- **Real cost to manage:** it is neither RAM nor APK, it is scan time — reading each file's metadata block during the initial scan adds I/O that does not exist in the original v1.0 (which only reads the filename from the filesystem, without opening the contents). This is neutralised by section 3.9.3 (cache).
+
+### 3.9.3 Scan result cache between sessions
+
+Updates v1.0 section 4.1, which left this pending verification according to the expected file volume. Its inclusion is confirmed from the initial design, given that the scan now includes reading metadata (3.9.2), which makes the cache more valuable than in the filename-only version.
+
+- Persistence in the app's internal storage: a plain text file with one entry per song (absolute path + cached title), structured simply for fast reading/writing.
+- Invalidation: compare the last-modified timestamp of the `Music/` folder (and relevant subfolders) against the date of the saved cache; if there are new or modified files, re-scan only what is necessary instead of the entire library (`[VERIFY DURING IMPLEMENTATION]`: define whether invalidation is fine-grained, per subfolder, or coarse-grained, whole library — fine-grained is more efficient but harder to implement correctly).
+- The manual refresh option is kept (v1.0 section 4.1, `[UPDATE]`) for the case where the user adds files and wants to see them without waiting for the next automatic change detection.
+- **Verified cost:** ~0 KB of additional RAM at runtime (it is the same information already in memory, only additionally persisted), ~240 KB on the user's device disk (does not count against the APK size), ~10-15 KB of additional APK for the reading/writing/invalidation logic.
+
+### 3.9.4 Full metadata (album, artist, track number) — discarded, and why (record for the transparency document, section 6)
+
+It was explicitly evaluated and discarded, **not for resource cost** (verified as small, of the same order as 3.9.1-3.9.3) but for scope cost: showing album and artist creates a natural expectation of browsing by album/artist, which would push a redesign of the MUSIC section towards a conventional library paradigm — the territory where Musicolet, Poweramp and other players already compete well. This project's differentiator is the specific combination of real bit-perfect and radical minimalism; diluting the second to more closely resemble the competition in library organisation reduces the project's reason to exist rather than strengthening it. This decision must be communicated explicitly in the public transparency document (section 6) as a deliberate product choice, not as an unresolved technical limitation nor an oversight.
+
+---
+
+## 4. Size and RAM estimates — pure native C/C++ version
+
+With the caveat that these figures depend heavily on which graphics engine option (3.2) is chosen, and that they remain engineering estimates, not real measurements:
+
+| Component | Estimate |
 |---|---|
-| libFLAC (solo decoder, sin encoder, sin soporte Ogg) | ~80-150 KB (reducido desde ~150-300 KB de un build completo encoder+decoder, ver sección 3.8.1) |
-| Motor gráfico (Opción A: rasterización manual) | ~20-50 KB de código propio |
-| Fuente bitmap embebida | ~10-30 KB (una fuente bitmap monoespaciada completa es pequeña) |
-| Capa Java/Kotlin mínima (Service + Notification + puente USB, con R8 shrinking) | ~50-150 KB (esto es lo mínimo irreducible del lado framework) |
-| AndroidManifest + firma + overhead de empaquetado | ~50-100 KB |
-| **TOTAL APK (Opción A confirmada, decoder-only, -Os, símbolos strippeados)** | **~210-480 KB** |
+| libFLAC (decoder only, no encoder, no Ogg support) | ~80-150 KB (reduced from ~150-300 KB for a full encoder+decoder build, see section 3.8.1) |
+| Graphics engine (Option A: manual rasterisation) | ~20-50 KB of our own code |
+| Embedded bitmap font | ~10-30 KB (a complete monospaced bitmap font is small) |
+| Minimal Java/Kotlin layer (Service + Notification + USB bridge, with R8 shrinking) | ~50-150 KB (this is the irreducible minimum on the framework side) |
+| AndroidManifest + signature + packaging overhead | ~50-100 KB |
+| **TOTAL APK (Option A confirmed, decoder-only, -Os, symbols stripped)** | **~210-480 KB** |
 
-**RAM en uso activo:**
+**RAM in active use:**
 
-| | Estimación |
+| | Estimate |
 |---|---|
-| Proceso base de Android (Zygote fork mínimo, sin runtime pesado de Kotlin/Compose) | ~5-8 MB |
-| Buffers de audio (PCM en streaming, cola) | ~2-5 MB |
-| Buffer gráfico (framebuffer de la UI, pequeño dado que es solo texto sin capas complejas) | ~1-3 MB |
-| Biblioteca en memoria: jerarquía de carpetas + títulos cacheados (sección 3.9, ~3,000 canciones de referencia) | ~0.15 MB |
-| **TOTAL RAM estimado** | **~8-16 MB** (el incremento de 3.9 es inferior al margen de redondeo de las demás estimaciones) |
+| Android base process (minimal Zygote fork, no heavy Kotlin/Compose runtime) | ~5-8 MB |
+| Audio buffers (streaming PCM, queue) | ~2-5 MB |
+| Graphics buffer (UI framebuffer, small given it is only text with no complex layers) | ~1-3 MB |
+| Library in memory: folder hierarchy + cached titles (section 3.9, ~3,000 reference songs) | ~0.15 MB |
+| **TOTAL estimated RAM** | **~8-16 MB** (the increase from 3.9 is below the rounding margin of the other estimates) |
 
-Esto sí representa una reducción real y significativa frente a la versión Kotlin/Views (~15-25MB) o Compose (~30-45MB) de la iteración anterior — la diferencia viene principalmente de evitar el runtime de ART/Kotlin cargando clases de framework y el overhead de cualquier sistema de UI administrado, que es exactamente el costo que identificamos en el análisis previo.
+This does represent a real and significant reduction against the Kotlin/Views (~15-25 MB) or Compose (~30-45 MB) version of the previous iteration — the difference comes mainly from avoiding the ART/Kotlin runtime loading framework classes and the overhead of any managed UI system, which is exactly the cost we identified in the earlier analysis.
 
-**Nota de honestidad para el documento de transparencia (sección 6):** estas cifras de "~210-480KB de APK y ~8-16MB de RAM" son las que se pueden comunicar públicamente **solo después de verificarlas con una build real** — no antes. Publicar una cifra de marketing sin haberla medido en un build de release firmado sería contrario al principio de honestidad que motiva este documento.
-
----
-
-## 5. Fragmentación de hardware — Obligación de comunicación pública
-
-Este es el punto más delicado del proyecto como software público, y merece tratamiento explícito porque la promesa central del producto (bit-perfect) no es algo que el equipo pueda garantizar universalmente.
-
-### 5.1 Lo que se sabe con evidencia (de esta conversación)
-
-- El comportamiento de AAudio EXCLUSIVE/MMAP varía por fabricante de SoC y por cómo cada OEM configuró su HAL — confirmado con evidencia real de issues de GitHub del proyecto Oboe de Google mostrando fallos silenciosos específicos en hardware Samsung/Exynos bajo ciertas condiciones (altavoz interno, Dolby Atmos activo).
-- **Este modo de fallo no es solo "degradación silenciosa a SHARED" — puede ser silencio total de audio**, un fallo más grave que simplemente perder bit-perfect. Los reportes documentados (Exynos con altavoz interno + MMAP habilitado) muestran ausencia completa de sonido, no solo pérdida de calidad. Esto debe comunicarse explícitamente en el documento de transparencia pública (sección 6) y, idealmente, como una nota práctica de troubleshooting: si la app no produce ningún sonido en un dispositivo Samsung/Exynos específico, una causa conocida es la interacción entre MMAP y mejoras de audio de fábrica como Dolby Atmos — desactivarlas en Ajustes de sonido del sistema es un paso de diagnóstico razonable antes de asumir que la app está rota.
-- No existe una lista pública confiable, mantenida por Google o por los fabricantes, de qué chipsets/dispositivos soportan exclusive de forma consistente — la única forma confiable de saberlo es probar en el dispositivo específico.
-- Esto significa que **el propio equipo del proyecto no puede, de buena fe, publicar una lista de "dispositivos compatibles"** sin haberlos probado uno por uno, lo cual no es viable para un proyecto pequeño de código abierto.
-
-### 5.2 Estrategia de comunicación requerida (no opcional)
-
-1. El indicador bit-perfect en la UI (v1.0 sección 3.4) es la primera línea de honestidad — se mantiene sin cambios y es innegociable.
-2. El README público del repositorio debe incluir, de forma prominente (no al final, no en letra pequeña): una sección explícita titulada algo como **"Sobre la promesa de bit-perfect"** que explique, en lenguaje simple, que el resultado depende del hardware del usuario, por qué (fragmentación de HAL entre fabricantes), y cómo el usuario puede verificar su propio caso (el indicador en tiempo real de la app).
-3. **`[DECISIÓN PENDIENTE]`**: evaluar si el proyecto debe mantener una lista pública, alimentada por reportes de la comunidad (ej. un archivo `COMPATIBILITY.md` donde los propios usuarios reporten vía pull request o issue si consiguieron bit-perfect real en su dispositivo específico) — esto sería coherente con el espíritu open source (la comunidad genera el dato que el equipo no puede generar solo) pero requiere definir un proceso de verificación mínimo para evitar reportes falsos o mal interpretados.
-4. Ningún material de marketing/README puede usar frases como "bit-perfect garantizado" o "compatible con cualquier DAC" sin calificarlas inmediatamente con la limitación real. La redacción sugerida por defecto es del tipo: *"[Nombre del proyecto] solicita al sistema operativo el modo de audio más directo posible (bit-perfect) disponible en tu dispositivo. Esto depende de tu hardware específico — la app te dice en tiempo real si lo consiguió y por qué, si no."*
+**Honesty note for the transparency document (section 6):** these figures of "~210-480 KB of APK and ~8-16 MB of RAM" are the ones that can be communicated publicly **only after verifying them with a real build** — not before. Publishing a marketing figure without having measured it in a signed release build would be contrary to the honesty principle that motivates this document.
 
 ---
 
-## 6. Documento de Transparencia Pública — Especificación de su contenido
+## 5. Hardware fragmentation — Public communication obligation
 
-Se confirmó que el proyecto requiere, además del código abierto en sí, un documento de transparencia técnica explícito acompañando cada release. Este documento (llamémoslo `TRANSPARENCY.md` o `DESIGN_DECISIONS.md` en el repositorio) debe contener, como mínimo:
+This is the most delicate point of the project as public software, and it deserves explicit treatment because the product's central promise (bit-perfect) is not something the team can guarantee universally.
 
-1. **Qué hace la app, exhaustivamente** — equivalente a la sección 1 de v1.0, en lenguaje accesible a usuarios no técnicos.
-2. **Qué NO hace la app, y por qué fue una decisión deliberada, no una limitación técnica no resuelta** — equivalente a v1.0 sección 1.2, reescrito para público general (ej. "no tenemos ecualizador porque cada etapa de procesamiento de audio adicional es una oportunidad de romper bit-perfect — si quieres EQ, esta no es tu app, y está bien, para eso existen Poweramp/Neutron").
-3. **Los trade-offs de arquitectura tomados y su costo real** — esto incluye explícitamente la decisión de UI 100% nativa en C/C++ (sección 3 de este documento) con su costo de mantenibilidad reconocido (menos contribuidores potenciales, más superficie de bugs de bajo nivel como manejo manual de memoria e input) frente a su beneficio (RAM/tamaño mínimos). No ocultar que esta decisión tiene un costo, incluso cuando se está orgulloso del resultado.
-4. **Los límites de la promesa bit-perfect**, como se detalla en la sección 5.2 de este documento, incluyendo la nota práctica de troubleshooting sobre silencio total en hardware Samsung/Exynos con Dolby Atmos u otras mejoras de audio de fábrica activas (sección 5.1).
-5. **Permisos solicitados y por qué cada uno es estrictamente necesario** — lista exhaustiva (equivalente a v1.0 sección 4.5), con una línea de justificación por permiso, para que cualquier usuario técnico o no técnico entienda exactamente qué puede tocar la app y qué no (ej. "no pedimos permiso de Internet porque la app nunca se conecta a ninguna red, verificable en el código fuente en [ruta del archivo de manifiesto]").
-6. **Versión mínima de Android soportada y la razón de esa elección** (sección 2 de este documento), sin ocultar que es una decisión de alcance reducido a cambio de estabilidad, y que excluye dispositivos más viejos deliberadamente.
-7. **Estimaciones de tamaño/RAM, marcadas explícitamente como medidas reales de una build específica (con número de versión y fecha) o como estimaciones de diseño aún no verificadas** — nunca presentar una estimación como si fuera una medición confirmada.
+### 5.1 What is known with evidence (from this conversation)
 
----
+- The behaviour of AAudio EXCLUSIVE/MMAP varies by SoC manufacturer and by how each OEM configured its HAL — confirmed with real evidence from GitHub issues in Google's Oboe project showing specific silent failures on Samsung/Exynos hardware under certain conditions (internal speaker, Dolby Atmos active).
+- **This failure mode is not only "silent degradation to SHARED" — it can be total audio silence**, a more serious failure than merely losing bit-perfect. The documented reports (Exynos with internal speaker + MMAP enabled) show a complete absence of sound, not just a loss of quality. This must be communicated explicitly in the public transparency document (section 6) and, ideally, as a practical troubleshooting note: if the app produces no sound at all on a specific Samsung/Exynos device, a known cause is the interaction between MMAP and factory audio enhancements such as Dolby Atmos — disabling them in the system's Sound settings is a reasonable diagnostic step before assuming the app is broken.
+- There is no reliable public list, maintained by Google or by the manufacturers, of which chipsets/devices support exclusive consistently — the only reliable way to know is to test on the specific device.
+- This means that **the project team itself cannot, in good faith, publish a list of "compatible devices"** without having tested them one by one, which is not viable for a small open-source project.
 
-## 7. Preguntas abiertas actualizadas (reemplaza la sección 5 de v1.0)
+### 5.2 Required communication strategy (not optional)
 
-**Resueltas en esta revisión:**
-- ~~Compose vs Views~~ — obsoleta, la UI es 100% C/C++ nativo, no aplica ninguna de las dos.
-- ~~Scoped Storage bloqueando acceso a Music/~~ — resuelto en sección 3.7: `Music/` es carpeta de medios reconocida, FUSE permite File API directo, no se necesita SAF ni MediaStore.
-- ~~Opción A vs B de motor gráfico~~ — resuelto en sección 3.2: Opción A (rasterización manual) confirmada como decisión final.
-- ~~Si la lógica de volumen/DAC es específica a un fabricante~~ — resuelto en sección 3.5: ya no depende de detectar el fabricante ni el estándar que expone — es una pregunta explícita al usuario, universal por construcción, sin importar qué DAC conecten.
-- ~~Optimización final de tamaño de libFLAC~~ — resuelto en sección 3.8: decoder-only, sin Ogg, `-Os`, símbolos strippeados.
-- ~~Parsing de descriptor USB Audio Class para detectar `FU_VOLUME_CONTROL`~~ — descartado por completo en sección 3.5. Se reemplaza por confirmación explícita del usuario, con bloqueo de reproducción hasta responder en el primer uso de cada DAC nuevo, y memoria por vendor/product ID.
-- ~~El indicador bit-perfect no reflejaba el efecto del volumen por software~~ — resuelto en sección 3.6: se añade el estado `BIT-PERFECT: PARCIAL`, cruzando el resultado de AAudio con el estado de volumen configurado en la sección 3.5.
-- ~~Falta de contexto en la pregunta bloqueante de volumen para un usuario primerizo~~ — resuelto en sección 3.5: se añaden dos líneas de contexto antes de la pregunta, sin convertirlo en onboarding.
-- ~~El documento no distinguía "degradación silenciosa a SHARED" de "silencio total de audio" como modos de fallo distintos~~ — resuelto en sección 5.1: se documenta explícitamente el riesgo de silencio total en Samsung/Exynos con MMAP + Dolby Atmos, con nota de troubleshooting para el documento de transparencia.
-
-**Aún pendientes:**
-
-1. **(Sección 3.1)** Confirmar el patrón exacto de comunicación JNI mínima entre la Activity/Service de Java y la capa C/C++ — específicamente cómo se le pasan al código nativo los callbacks de ciclo de vida y los eventos de conexión/desconexión USB sin introducir overhead innecesario en ese puente.
-2. **(Sección 3.3)** Elegir la fuente bitmap específica a embeber (Spleen/Terminus/Tamzen u otra) verificando que su licencia exacta es compatible con distribución en un proyecto open source (revisar si son de dominio público, MIT, o licencia similar permisiva).
-3. **(Sección 5.2, punto 3)** Decidir si se implementa el archivo `COMPATIBILITY.md` alimentado por la comunidad desde el lanzamiento inicial o se pospone a una iteración posterior.
-4. Confirmar en pruebas reales con el UA7 que el flujo de la sección 3.5 (pregunta explícita, bloqueo hasta responder, persistencia por vendor/product ID) funciona correctamente end-to-end — dado que ya no depende de parsear el descriptor de audio, la superficie de prueba se reduce a: lectura correcta de vendor/product ID vía `UsbManager`, y que la persistencia por dispositivo funcione al reconectar el mismo DAC.
-5. **Nueva pregunta introducida por el cambio a proyecto público:** ¿bajo qué licencia de código abierto se publica el proyecto (MIT, GPL, Apache 2.0, etc.)? Esto no es un detalle menor — afecta si terceros pueden hacer forks comerciales, si contribuciones externas requieren cesión de derechos, y es información que un desarrollador retomando este documento necesita antes de subir el primer commit público.
+1. The bit-perfect indicator in the UI (v1.0 section 3.4) is the first line of honesty — it stands unchanged and is non-negotiable.
+2. The repository's public README must include, prominently (not at the end, not in small print): an explicit section titled something like **"About the bit-perfect promise"** explaining, in simple language, that the result depends on the user's hardware, why (HAL fragmentation between manufacturers), and how the user can verify their own case (the app's real-time indicator).
+3. **`[PENDING DECISION]`**: evaluate whether the project should maintain a public list fed by community reports (e.g. a `COMPATIBILITY.md` file where users themselves report via pull request or issue whether they obtained real bit-perfect on their specific device) — this would be coherent with the open-source spirit (the community generates the data the team cannot generate alone) but requires defining a minimum verification process to avoid false or misinterpreted reports.
+4. No marketing/README material may use phrases such as "guaranteed bit-perfect" or "compatible with any DAC" without immediately qualifying them with the real limitation. The suggested default wording is of the kind: *"[Project name] asks the operating system for the most direct audio mode possible (bit-perfect) available on your device. This depends on your specific hardware — the app tells you in real time whether it obtained it and, if not, why."*
 
 ---
 
-## 8. Resumen ejecutivo actualizado
+## 6. Public Transparency Document — Specification of its content
 
-- **Cambio de alcance:** de herramienta personal a proyecto open source público — introduce obligación de transparencia formal (sección 6) y soporte a hardware no controlado por el equipo (sección 5).
-- **UI:** 100% C/C++ nativo vía NDK, sin framework de UI de Android, con motor gráfico propio confirmado como rasterización manual (Opción A, sección 3.2) — decisión de máximo ahorro de recursos, con costo reconocido de mantenibilidad y superficie de bugs de bajo nivel.
-- **Target:** Android 8.0 (API 26) como `minSdk` (actualizado; era API 31 — ver sección 2 para el razonamiento completo); `targetSdk` debe seguir el mínimo que exija Google Play/F-Droid al momento de cada release (API 35-36 en 2026), lo cual implica mantenimiento continuo del proyecto para no quedar obsoleto ante usuarios nuevos.
-- **Tamaño estimado:** ~210-480 KB de APK (tras optimizaciones de la sección 3.8: libFLAC decoder-only, `-Os`, símbolos strippeados) más ~15-45 KB por las mejoras de biblioteca de la sección 3.9; ~8-16 MB de RAM en uso — cifras a verificar con build real antes de comunicarlas públicamente.
-- **Audio:** libFLAC decoder-only vía JNI/NDK + AAudio EXCLUSIVE con verificación real de `isMMapUsed()` + indicador bit-perfect de tres estados (SI/PARCIAL/NO) que cruza el resultado de AAudio con el estado real de volumen, con detalle completo en Configuración (sección 3.6).
-- **Volumen:** confirmación explícita del usuario por DAC conectado, sin parsing de descriptores USB, con bloqueo de reproducción hasta responder en cada DAC nuevo (sección 3.5) — nunca atenuación digital de software como alternativa.
-- **Biblioteca:** escaneo recursivo de `Music/` con jerarquía de carpetas preservada, título de tag con fallback a nombre de archivo, y caché entre sesiones (sección 3.9) — metadata completa (álbum/artista) descartada deliberadamente.
-- **Distribución:** GitHub (código y documentación) + F-Droid (APK) como canales principales; Play Store queda como opción secundaria posible más adelante, dado el costo de mantenimiento continuo de `targetSdk` y la barrera de 12 testers/14 días para cuentas nuevas.
-- **Transparencia:** documento público obligatorio (`TRANSPARENCY.md`) detallando qué se hace, qué no se hace y por qué, límites reales de bit-perfect, y todos los trade-offs de arquitectura sin ocultar sus costos.
+It was confirmed that the project requires, in addition to the open source code itself, an explicit technical transparency document accompanying every release. This document (let us call it `TRANSPARENCY.md` or `DESIGN_DECISIONS.md` in the repository) must contain, as a minimum:
+
+1. **What the app does, exhaustively** — equivalent to section 1 of v1.0, in language accessible to non-technical users.
+2. **What the app does NOT do, and why that was a deliberate decision rather than an unresolved technical limitation** — equivalent to v1.0 section 1.2, rewritten for a general audience (e.g. "we have no equaliser because every additional audio processing stage is an opportunity to break bit-perfect — if you want EQ, this is not your app, and that is fine, Poweramp/Neutron exist for that").
+3. **The architectural trade-offs taken and their real cost** — this explicitly includes the 100% native C/C++ UI decision (section 3 of this document) with its acknowledged maintainability cost (fewer potential contributors, a larger surface for low-level bugs such as manual memory and input handling) against its benefit (minimum RAM/size). Do not hide that this decision has a cost, even when one is proud of the result.
+4. **The limits of the bit-perfect promise**, as detailed in section 5.2 of this document, including the practical troubleshooting note about total silence on Samsung/Exynos hardware with Dolby Atmos or other factory audio enhancements active (section 5.1).
+5. **Permissions requested and why each one is strictly necessary** — an exhaustive list (equivalent to v1.0 section 4.5), with one line of justification per permission, so that any user, technical or not, understands exactly what the app can touch and what it cannot (e.g. "we do not request Internet permission because the app never connects to any network, verifiable in the source code at [path to the manifest file]").
+6. **The minimum supported Android version and the reason for that choice** (section 2 of this document), without hiding that it is a decision to reduce reach in exchange for stability, and that it deliberately excludes older devices.
+7. **Size/RAM estimates, explicitly marked either as real measurements of a specific build (with version number and date) or as design estimates not yet verified** — never present an estimate as though it were a confirmed measurement.
+
+---
+
+## 7. Updated open questions (replaces section 5 of v1.0)
+
+**Resolved in this revision:**
+- ~~Compose vs Views~~ — obsolete, the UI is 100% native C/C++, neither applies.
+- ~~Scoped Storage blocking access to Music/~~ — resolved in section 3.7: `Music/` is a recognised media folder, FUSE permits the direct File API, neither SAF nor MediaStore is needed.
+- ~~Graphics engine Option A vs B~~ — resolved in section 3.2: Option A (manual rasterisation) confirmed as the final decision.
+- ~~Whether the volume/DAC logic is manufacturer-specific~~ — resolved in section 3.5: it no longer depends on detecting the manufacturer or the standard it exposes — it is an explicit question to the user, universal by construction, regardless of which DAC they connect.
+- ~~Final libFLAC size optimisation~~ — resolved in section 3.8: decoder-only, no Ogg, `-Os`, symbols stripped.
+- ~~Parsing the USB Audio Class descriptor to detect `FU_VOLUME_CONTROL`~~ — discarded entirely in section 3.5. Replaced by explicit user confirmation, with playback blocked until answered on the first use of each new DAC, and memory by vendor/product ID.
+- ~~The bit-perfect indicator did not reflect the effect of software volume~~ — resolved in section 3.6: the `BIT-PERFECT: PARTIAL` state is added, crossing AAudio's result with the volume state configured in section 3.5.
+- ~~Lack of context in the blocking volume question for a first-time user~~ — resolved in section 3.5: two lines of context are added before the question, without turning it into onboarding.
+- ~~The document did not distinguish "silent degradation to SHARED" from "total audio silence" as distinct failure modes~~ — resolved in section 5.1: the risk of total silence on Samsung/Exynos with MMAP + Dolby Atmos is documented explicitly, with a troubleshooting note for the transparency document.
+
+**Still pending:**
+
+1. **(Section 3.1)** Confirm the exact pattern of minimal JNI communication between the Java Activity/Service and the C/C++ layer — specifically how lifecycle callbacks and USB connect/disconnect events are passed to the native code without introducing unnecessary overhead on that bridge.
+2. **(Section 3.3)** Choose the specific bitmap font to embed (Spleen/Terminus/Tamzen or another), verifying that its exact licence is compatible with distribution in an open-source project (check whether they are public domain, MIT, or a similarly permissive licence).
+3. **(Section 5.2, point 3)** Decide whether the community-fed `COMPATIBILITY.md` file is implemented from the initial launch or deferred to a later iteration.
+4. Confirm in real testing with the UA7 that the flow of section 3.5 (explicit question, blocking until answered, persistence by vendor/product ID) works correctly end to end — since it no longer depends on parsing the audio descriptor, the test surface reduces to: correct reading of vendor/product ID via `UsbManager`, and that per-device persistence works when reconnecting the same DAC.
+5. **New question introduced by the move to a public project:** under which open-source licence is the project published (MIT, GPL, Apache 2.0, etc.)? This is not a minor detail — it affects whether third parties can make commercial forks, whether outside contributions require an assignment of rights, and it is information a developer picking this document up needs before pushing the first public commit.
+
+---
+
+## 8. Updated executive summary
+
+- **Change of scope:** from personal tool to public open-source project — introduces an obligation of formal transparency (section 6) and support for hardware not controlled by the team (section 5).
+- **UI:** 100% native C/C++ via the NDK, with no Android UI framework, with an in-house graphics engine confirmed as manual rasterisation (Option A, section 3.2) — a decision for maximum resource saving, with an acknowledged cost in maintainability and low-level bug surface.
+- **Target:** Android 8.0 (API 26) as `minSdk` (updated; it was API 31 — see section 2 for the full reasoning); `targetSdk` must follow the minimum required by Google Play/F-Droid at the time of each release (API 35-36 in 2026), which implies continuous maintenance of the project so as not to become obsolete for new users.
+- **Estimated size:** ~210-480 KB of APK (after the section 3.8 optimisations: decoder-only libFLAC, `-Os`, stripped symbols) plus ~15-45 KB for the library improvements of section 3.9; ~8-16 MB of RAM in use — figures to be verified with a real build before communicating them publicly.
+- **Audio:** decoder-only libFLAC via JNI/NDK + AAudio EXCLUSIVE with real verification of `isMMapUsed()` + a three-state bit-perfect indicator (YES/PARTIAL/NO) that crosses AAudio's result with the real volume state, with full detail in Configuration (section 3.6).
+- **Volume:** explicit user confirmation per connected DAC, without parsing USB descriptors, with playback blocked until answered on each new DAC (section 3.5) — never software digital attenuation as an alternative.
+- **Library:** recursive scan of `Music/` with the folder hierarchy preserved, tag title with fallback to filename, and a cache between sessions (section 3.9) — full metadata (album/artist) deliberately discarded.
+- **Distribution:** GitHub (code and documentation) + F-Droid (APK) as the main channels; the Play Store remains a possible secondary option later, given the ongoing maintenance cost of `targetSdk` and the 12-testers/14-days barrier for new accounts.
+- **Transparency:** a mandatory public document (`TRANSPARENCY.md`) detailing what is done, what is not done and why, the real limits of bit-perfect, and every architectural trade-off without hiding its costs.
