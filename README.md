@@ -2,7 +2,7 @@
 
 **https://github.com/aleatropy/Flast**
 
-A bit-perfect FLAC player for Android. **127 KB** installed, no
+A bit-perfect FLAC player for Android. **131 KB** installed, no
 network access, no ads, no accounts, no library scraping, no settings you
 have to understand before it plays music.
 
@@ -25,7 +25,7 @@ ALL TRACKS  │  ALBUMS
 
 ## Download and install
 
-**If you don't know what CPU your phone has, take `app-universal-release.apk`.**
+**If you don't know what CPU your phone has, take `flast-1.0.0-universal.apk`.**
 It works on every Android phone and tablet and costs you about 180 KB more.
 
 There are **three different CPU architectures** in the Android world, not
@@ -34,15 +34,15 @@ tablets are ARM; emulators and a few Chromebooks are Intel.
 
 | File | Which CPU | Which devices |
 |---|---|---|
-| `flast-1.0.0-universal.apk` | **all three, bundled** | **anything — pick this if unsure.** 297,703 B |
-| `flast-1.0.0-arm64-v8a.apk` | 64-bit ARM | almost every phone/tablet since ~2017. 118,426 B |
-| `flast-1.0.0-armeabi-v7a.apk` | 32-bit ARM | older and budget phones. **Untested — see below.** 99,360 B |
-| `flast-1.0.0-x86_64.apk` | 64-bit Intel/AMD | Android emulators, some Chromebooks, a few old Intel tablets. 117,311 B |
+| `flast-1.0.0-universal.apk` | **all three, bundled** | **anything — pick this if unsure.** 300,015 B |
+| `flast-1.0.0-arm64-v8a.apk` | 64-bit ARM | almost every phone/tablet since ~2017. 120,722 B |
+| `flast-1.0.0-armeabi-v7a.apk` | 32-bit ARM | older and budget phones. **Untested — see below.** 102,092 B |
+| `flast-1.0.0-x86_64.apk` | 64-bit Intel/AMD | Android emulators, some Chromebooks, a few old Intel tablets. 119,623 B |
 
 **The universal APK is not a clever binary that runs everywhere.** It is a
 bundle containing all three, and your device picks the one it needs and
 ignores the other two. That is why it is roughly the size of the three added
-together. It costs about 176 KB of extra storage and **zero extra RAM** —
+together. It costs about 179 KB of extra storage and **zero extra RAM** —
 Android never loads the copies your CPU cannot run. If you are not certain
 what is inside your phone, take it; you cannot choose wrong.
 
@@ -76,7 +76,7 @@ Every release is signed with the same key. You can check that an APK really
 came from this project:
 
 ```
-apksigner verify --print-certs app-universal-release.apk
+apksigner verify --print-certs flast-1.0.0-universal.apk
 ```
 
 The SHA-256 of the signing certificate must be:
@@ -180,8 +180,12 @@ Each of these is a decision, not a missing feature:
   would mean decoding the next track into the same buffer before the
   current one ends, and the accounting that requires — which track does
   the sample now leaving the buffer belong to? — is not worth the risk to
-  a player whose entire job is not corrupting the samples. 10 ms is below
-  what anyone can hear; it is not a claim of gapless.
+  a player whose entire job is not corrupting the samples. **A listener
+  can still hear the seam** on an album written to run continuously, and
+  how large it is depends on your storage speed and your device's audio
+  HAL, so it may well be bigger on your phone than the figure measured
+  below. If you need a genuinely seamless album, this is not the player
+  for it, and saying otherwise would be a lie.
 - **No accounts, no telemetry, no analytics, no crash reporting.**
 
 ## Permissions, and why each one exists
@@ -204,15 +208,15 @@ XMOS USB DAC. These are measurements, not estimates:
 
 | | |
 |---|---|
-| APK | 118,426 B (arm64) · 99,360 B (armeabi-v7a) · 297,703 B (universal) |
-| Installed on device | **127 KB** |
+| APK | 120,722 B (arm64) · 102,092 B (armeabi-v7a) · 300,015 B (universal) |
+| Installed on device | **131 KB** |
 | Scan cache for 658 tracks | 30,045 B |
 | RAM in use | ~15–20 MB |
 | CPU, 44.1 kHz/16-bit bit-perfect | 18.9% of one core (≈2.4% of an 8-core phone) |
 | CPU, 96 kHz/24-bit bit-perfect | 19.96% of one core |
 | CPU, same file in non-bit-perfect SHARED mode | 8.80% of one core |
 | Library scan | 658 files across 2 volumes in 254 ms |
-| Silence between two tracks of an album | **7–10 ms** |
+| Silence between two tracks of an album | **7–10 ms** — device-dependent, see above |
 
 Roughly 14 of those 19 CPU points are Android's own low-latency MMAP audio
 path, not FLAC decoding — decoding is about 4%.

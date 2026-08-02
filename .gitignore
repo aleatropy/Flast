@@ -29,6 +29,7 @@ local.properties
 *.hprof
 
 # IDE / tooling
+.claude/
 .idea/
 *.iml
 .DS_Store

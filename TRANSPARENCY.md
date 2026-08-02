@@ -72,7 +72,15 @@ bit-perfect gets broken quietly. The only volume control this app will ever
 use is your DAC's own, or Android's system volume — and when the system's is
 in play, the indicator says so.
 
-**No gapless playback, no crossfade, no seek bar, no shuffle, no repeat.**
+**No crossfade, no seek bar, no shuffle, no repeat. No true gapless
+playback** — the silence between two tracks measures 7–10 ms here, which is
+short but not nothing, and a listener can hear the seam on an album written
+to run continuously. Sample-exact gapless would mean decoding the next track
+into the same buffer before the current one ends and tracking which track
+every sample in flight belongs to; that is a correctness risk this player
+declines to take. Expect the figure to differ on other hardware — it is set
+by storage speed and by the device's audio HAL, neither of which this project
+controls.
 
 **No settings beyond theme and text size.**
 
@@ -85,7 +93,7 @@ a raw graphics buffer. There is no Android UI framework in it — no Views, no
 Compose, no layouts, no system fonts. Text is drawn by copying glyphs out of
 an 8×16 bitmap font compiled into the binary.
 
-**What that buys:** the app installs in 127 KB and runs in roughly 15–20
+**What that buys:** the app installs in 131 KB and runs in roughly 15–20
 MB of RAM. A conventional Kotlin/Compose player of the same scope would be
 tens of megabytes of APK and 30–45 MB of RAM.
 
@@ -240,11 +248,11 @@ measurements of one build on one device, not guarantees.**
 
 | | |
 |---|---|
-| APK, arm64-v8a | 118,426 bytes |
-| APK, armeabi-v7a | 99,360 bytes |
-| APK, x86_64 | 117,311 bytes |
-| APK, universal (all three) | 297,703 bytes |
-| Installed size on device | **127 KB** |
+| APK, arm64-v8a | 120,722 bytes |
+| APK, armeabi-v7a | 102,092 bytes |
+| APK, x86_64 | 119,623 bytes |
+| APK, universal (all three) | 300,015 bytes |
+| Installed size on device | **131 KB** |
 | Scan cache, 658 tracks | 30,045 bytes (~46 bytes per track) |
 | Playlists | a few bytes per track |
 

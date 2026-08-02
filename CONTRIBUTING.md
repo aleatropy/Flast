@@ -32,7 +32,7 @@ Not because they are bad ideas — because they are not this app:
   app holds no `INTERNET` permission and that is a promise to users, not an
   oversight.
 - Analytics, crash reporting, telemetry.
-- A UI framework. The C rendering layer is the reason the app is 127 KB.
+- A UI framework. The C rendering layer is the reason the app is 131 KB.
 - Support for other formats (MP3, Ogg, WAV, ALAC).
 - A software volume slider inside the app.
 

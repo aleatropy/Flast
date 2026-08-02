@@ -4,7 +4,7 @@
 
 First release.
 
-A bit-perfect FLAC player for Android: 127 KB installed, roughly 15–20 MB of
+A bit-perfect FLAC player for Android: 131 KB installed, roughly 15–20 MB of
 RAM, no network access and no dependencies. The interface is written in C and
 draws every pixel itself; the Android layer is only what the operating system
 makes unavoidable — a foreground service, its notification, and USB device
@@ -24,7 +24,10 @@ detection.
   covers sharing mode, MMAP state, output format bit depth, sample rate and
   channel layout. Any resample, up-mix or down-mix reports `NO` and says so.
 - Track changes reuse the open stream, so the indicator does not silently
-  degrade partway through an album.
+  degrade partway through an album, and the next track's file is opened while
+  the current one is still playing. The silence between two tracks measures
+  7–10 ms on the test device; it is not sample-exact gapless, and how large it
+  is on other hardware depends on storage speed and the audio HAL.
 - Audio device changes (a DAC plugged in or pulled out) pause playback with the
   position kept, and resume from the same point.
 
