@@ -175,7 +175,13 @@ Each of these is a decision, not a missing feature:
   [TRANSPARENCY.md](TRANSPARENCY.md#2-what-it-deliberately-does-not-do).
 - **No software volume control inside the app.** Attenuating digitally would
   silently break the thing the app exists for.
-- **No gapless playback, no crossfade, no seek bar.**
+- **No crossfade and no seek bar.** Nor *true* gapless: the gap between two
+  tracks of an album is about **10 ms**, not zero. Sample-exact gapless
+  would mean decoding the next track into the same buffer before the
+  current one ends, and the accounting that requires — which track does
+  the sample now leaving the buffer belong to? — is not worth the risk to
+  a player whose entire job is not corrupting the samples. 10 ms is below
+  what anyone can hear; it is not a claim of gapless.
 - **No accounts, no telemetry, no analytics, no crash reporting.**
 
 ## Permissions, and why each one exists
@@ -206,6 +212,7 @@ XMOS USB DAC. These are measurements, not estimates:
 | CPU, 96 kHz/24-bit bit-perfect | 19.96% of one core |
 | CPU, same file in non-bit-perfect SHARED mode | 8.80% of one core |
 | Library scan | 658 files across 2 volumes in 254 ms |
+| Silence between two tracks of an album | **7–10 ms** |
 
 Roughly 14 of those 19 CPU points are Android's own low-latency MMAP audio
 path, not FLAC decoding — decoding is about 4%.

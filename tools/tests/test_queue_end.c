@@ -22,6 +22,7 @@ int flast_stream_play(const char *p, bool *bp, int32_t *sr, int32_t *b) {
     g_last_path = p; *bp = true; *sr = 44100; *b = 16; return 0;
 }
 void flast_stream_stop(void) {}
+void flast_stream_prefetch(const char *filepath) { (void)filepath; }
 void flast_stream_pause(void) {}
 bool flast_stream_resume(void) { return true; }
 double flast_stream_get_position_seconds(void) { return 0.0; }

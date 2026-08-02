@@ -44,6 +44,7 @@ typedef enum {
 extern FlastResult flast_stream_play(const char *filepath, bool *out_is_bit_perfect,
                                       int32_t *out_sample_rate, int32_t *out_bits);
 extern void flast_stream_stop(void);
+extern void flast_stream_prefetch(const char *filepath);
 extern void flast_stream_pause(void);
 extern bool flast_stream_resume(void);
 extern double flast_stream_get_position_seconds(void);
@@ -128,6 +129,14 @@ static void switch_to_index_locked(int index) {
     g_is_playing = (r == FLAST_OK);
     g_is_paused = false;
     g_dirty = true;
+
+    // Pull the front of the next track through the page cache now, while
+    // there are minutes of music left to cover it, so that the hand-over
+    // at the end of this track does not have to pay for a cold open.
+    // Fire-and-forget: it cannot fail in a way that matters.
+    if (g_is_playing && g_current_index + 1 < g_queue_count) {
+        flast_stream_prefetch(g_queue.items[g_current_index + 1]);
+    }
 }
 
 static void schedule_nav_locked(int new_index) {
