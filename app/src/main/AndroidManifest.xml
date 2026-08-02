@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Storage: API 31-32 still needs the broad READ_EXTERNAL_STORAGE,
+         API 33+ uses the granular audio-only permission (spec 3.7). -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- required="false" is the difference between "runs on any Android
+         device" and "runs on phones the manufacturer wired for USB OTG".
+         This was required="true", which is a HARD install/visibility
+         filter: Play hides the app outright from every device without
+         USB host mode, and sideloading onto one can fail with
+         INSTALL_FAILED_MISSING_SHARED_LIBRARY / a feature-check refusal
+         depending on the installer. The app does not need USB host to
+         function — with no DAC attached it plays through the phone's
+         own output and honestly reports BIT-PERFECT: NO (spec 3.6, last
+         row of the table). The USB DAC path is an enhancement, not a
+         requirement, so it is declared as one. -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:appCategory="audio"
+        android:requestLegacyExternalStorage="true"
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+        android:hardwareAccelerated="false">
+
+        <activity
+            android:name=".FlastNativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|uiMode|layoutDirection|fontScale|locale">
+
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="flacplayer_native" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+    </application>
+
+    <!--
+    Notes on the attributes above that are easy to misread as cosmetic:
+
+    android:hardwareAccelerated="false"
+        Measured, not assumed. On a Galaxy A55 cold start with the DAC
+        dialog never shown, `dumpsys meminfo com.flast` still reported
+        GL mtrack 1,156 KB — so HWUI was being initialised for this
+        process even though NativeActivity calls Window.takeSurface() and
+        this app draws every pixel itself with ANativeWindow_lock. That
+        is a GPU context and its buffers, maintained for a View hierarchy
+        that never draws anything.
+
+        This was only safe to turn off once the DAC volume question moved
+        out of an AlertDialog and into a native screen (see
+        draw_screen_dac_question in ui_main.c). With that gone the app
+        owns no Views at all, so there is nothing left that software
+        rendering could degrade. Runtime permission dialogs are drawn by
+        the system process, not this one, and are unaffected.
+
+        If any device ever shows a blank or garbled surface, this single
+        attribute is the first thing to flip back to "true".
+
+    android:requestLegacyExternalStorage="true"
+        Only has any effect on API 29 (Android 10), which is the single
+        release where scoped storage blocks direct file-path reads of
+        shared storage with no FUSE fallback. API 26-28 predate scoped
+        storage; API 30+ restore path access to media files through FUSE.
+        Without this the C scanner finds nothing on Android 10
+        specifically — a silent, one-version-wide hole that would look
+        exactly like "the app does not work on my phone".
+
+    android:configChanges="…density|uiMode|fontScale|locale…"
+        Every configuration change NOT listed here destroys and recreates
+        the Activity, which for a NativeActivity means android_main() is
+        torn down and restarted on a brand-new thread, reloading the
+        whole music library. Rotation and screen size were already
+        handled; this adds the rest of what a real device throws at an
+        app (dark-mode toggle, system font-size change, folding and
+        unfolding, plugging in a keyboard, changing locale).
+        on_cmd()/APP_CMD_CONFIG_CHANGED re-reads the display density and
+        draw_frame() re-reads the window size every frame, so the UI
+        adapts to all of them without a restart.
+    -->
+
+</manifest>

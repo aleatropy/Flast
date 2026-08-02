@@ -1,0 +1,76 @@
+# CMakeLists.txt de libFLAC (decoder-only)
+#
+# Compila SOLO los archivos fuente necesarios para decodificación,
+# excluyendo explícitamente:
+#   - Encoder (stream_encoder*.c) -- nunca codificamos FLAC
+#   - Soporte Ogg (ogg_*.c) -- solo FLAC nativo, sección 3.8.1
+#   - Intrinsics x86 (*_intrin_avx2/sse2/sse42/ssse3/fma.c) -- no se
+#     usan: en x86_64 (emulador/ChromeOS) se compila el camino C puro,
+#     que decodifica FLAC de sobra en tiempo real.
+#   - metadata_iterators.c / metadata_object.c / window.c / float.c --
+#     verificado con grep: stream_decoder.c y el resto de los archivos
+#     decoder-side no referencian NI UNA función de estos cuatro. Son
+#     la API de edición de metadata (nivel 0/1/2), las ventanas de
+#     apodización del encoder, y los helpers de log2 en punto fijo del
+#     estimador de compresión. metadata_iterators.c y metadata_object.c
+#     por sí solos eran los dos .o más grandes de toda la librería.
+#
+# lpc_intrin_neon.c sí se incluye: se auto-desactiva vía
+# `#if defined FLAC__CPU_ARM64 && FLAC__HAS_NEONINTRIN` (ver config.h,
+# que ahora deriva esos macros del compilador en vez de fijarlos), así
+# que aporta SIMD en arm64-v8a y compila a una unidad vacía en el resto
+# de ABIs.
+#
+# NOTA IMPORTANTE: este archivo se trae al build principal vía
+# include(), no add_subdirectory() -- porque se llama
+# CMakeLists_decoder_only.txt, no CMakeLists.txt. La diferencia
+# importa: include() NO cambia CMAKE_CURRENT_SOURCE_DIR (sigue
+# apuntando al CMakeLists.txt que hizo el include, es decir
+# app/src/main/cpp/), así que NO podemos usar esa variable aquí para
+# ubicar los archivos fuente. En su lugar, definimos FLAC_LIBFLAC_DIR
+# explícitamente como ruta absoluta basada en el CMakeLists.txt
+# principal.
+
+set(FLAC_LIBFLAC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/flac-1.4.3/src/libFLAC")
+set(FLAC_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/flac-1.4.3")
+
+add_library(flac_decoder STATIC
+    ${FLAC_LIBFLAC_DIR}/bitmath.c
+    ${FLAC_LIBFLAC_DIR}/bitreader.c
+    ${FLAC_LIBFLAC_DIR}/cpu.c
+    ${FLAC_LIBFLAC_DIR}/crc.c
+    ${FLAC_LIBFLAC_DIR}/fixed.c
+    ${FLAC_LIBFLAC_DIR}/format.c
+    ${FLAC_LIBFLAC_DIR}/lpc.c
+    ${FLAC_LIBFLAC_DIR}/lpc_intrin_neon.c
+    ${FLAC_LIBFLAC_DIR}/md5.c
+    ${FLAC_LIBFLAC_DIR}/memory.c
+    ${FLAC_LIBFLAC_DIR}/stream_decoder.c
+)
+
+target_include_directories(flac_decoder
+    PUBLIC
+        ${FLAC_ROOT_DIR}/include
+    PRIVATE
+        ${FLAC_ROOT_DIR}
+        ${FLAC_ROOT_DIR}/include/share
+        ${FLAC_LIBFLAC_DIR}/include
+)
+
+target_compile_definitions(flac_decoder
+    PRIVATE
+        HAVE_CONFIG_H
+        FLAC__NO_DLL
+)
+
+# Mismas flags de tamaño que el resto del proyecto (sección 3.8.2):
+# -Os, secciones por función/dato para que --gc-sections pueda tirar el
+# código muerto, y visibilidad oculta para que las ~213 funciones
+# FLAC__* dejen de ocupar espacio en la tabla de símbolos dinámicos del
+# .so final. FLAST_SIZE_FLAGS se define en el CMakeLists.txt principal,
+# que hace el include() de este archivo.
+target_compile_options(flac_decoder
+    PRIVATE
+        ${FLAST_SIZE_FLAGS}
+        -DNDEBUG
+)
